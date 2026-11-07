@@ -1,0 +1,206 @@
+{
+  "sourcePlacemarks": 712,
+  "sourceNamedPlotBlocks": 26,
+  "reconstructedCells": 556,
+  "singleLabelMatches": 524,
+  "ambiguousCells": 32,
+  "availability": "No inventory supplied; all unverified",
+  "reviewItems": [
+    {
+      "id": "plot-16-plot-16-cell-1-cell-1",
+      "reason": "ambiguous or absent label",
+      "candidates": [
+        "10",
+        "9",
+        "8",
+        "7",
+        "6",
+        "5",
+        "4",
+        "3",
+        "2",
+        "1"
+      ]
+    },
+    {
+      "id": "plot-20-plot-20-cell-1-cell-1",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-20-plot-20-cell-2-cell-2",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-20-plot-20-cell-3-cell-3",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-20-plot-20-cell-4-cell-4",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-20-plot-20-cell-5-cell-5",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-20-plot-20-cell-6-cell-6",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-21-plot-21-cell-1-cell-1",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-21-plot-21-cell-2-cell-2",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-21-plot-21-cell-3-cell-3",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-21-plot-21-cell-4-cell-4",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-21-plot-21-cell-5-cell-5",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-21-plot-21-cell-6-cell-6",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-22-plot-22-cell-1-cell-1",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-22-plot-22-cell-2-cell-2",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-22-plot-22-cell-3-cell-3",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-22-plot-22-cell-4-cell-4",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-22-plot-22-cell-5-cell-5",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-22-plot-22-cell-6-cell-6",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-22-plot-22-cell-7-cell-7",
+      "reason": "ambiguous or absent label",
+      "candidates": []
+    },
+    {
+      "id": "plot-14-396-cell-1",
+      "reason": "same label matched multiple cells",
+      "candidates": [
+        "396"
+      ]
+    },
+    {
+      "id": "plot-14-397-cell-2",
+      "reason": "same label matched multiple cells",
+      "candidates": [
+        "397"
+      ]
+    },
+    {
+      "id": "plot-14-394-cell-3",
+      "reason": "same label matched multiple cells",
+      "candidates": [
+        "394"
+      ]
+    },
+    {
+      "id": "plot-14-395-cell-4",
+      "reason": "same label matched multiple cells",
+      "candidates": [
+        "395"
+      ]
+    },
+    {
+      "id": "plot-14-392-cell-5",
+      "reason": "same label matched multiple cells",
+      "candidates": [
+        "392"
+      ]
+    },
+    {
+      "id": "plot-14-393-cell-6",
+      "reason": "same label matched multiple cells",
+      "candidates": [
+        "393"
+      ]
+    },
+    {
+      "id": "plot-14-392-cell-8",
+      "reason": "same label matched multiple cells",
+      "candidates": [
+        "392"
+      ]
+    },
+    {
+      "id": "plot-14-393-cell-9",
+      "reason": "same label matched multiple cells",
+      "candidates": [
+        "393"
+      ]
+    },
+    {
+      "id": "plot-14-394-cell-10",
+      "reason": "same label matched multiple cells",
+      "candidates": [
+        "394"
+      ]
+    },
+    {
+      "id": "plot-14-395-cell-11",
+      "reason": "same label matched multiple cells",
+      "candidates": [
+        "395"
+      ]
+    },
+    {
+      "id": "plot-14-396-cell-12",
+      "reason": "same label matched multiple cells",
+      "candidates": [
+        "396"
+      ]
+    },
+    {
+      "id": "plot-14-397-cell-13",
+      "reason": "same label matched multiple cells",
+      "candidates": [
+        "397"
+      ]
+    }
+  ],
+  "method": "UTM 43N; each block split by its named dividers extended 2m at both ends; label centroid containment. Approximate edges simplified at 0.12m. Never use as legal/survey dimensions."
+}

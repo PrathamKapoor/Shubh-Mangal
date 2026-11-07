@@ -1,0 +1,23 @@
+[Unit]
+Description=Shubh Mangal Residency
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shubh-mangal
+Group=shubh-mangal
+WorkingDirectory=/srv/shubh-mangal/current
+EnvironmentFile=/etc/shubh-mangal.env
+ExecStart=/usr/bin/node server/start.mjs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/shubh-mangal
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

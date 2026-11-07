@@ -1,0 +1,1794 @@
+import express from "express";
+import helmet from "helmet";
+import compression from "compression";
+import { randomBytes, randomUUID } from "node:crypto";
+import { z } from "zod";
+import { parse } from "csv-parse/sync";
+import { resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import {
+  contactSchema,
+  approvedDataSchema,
+  plotEditSchema,
+  reason,
+  roles,
+  visitStatuses,
+  can,
+} from "../shared/domain.mjs";
+import {
+  hash,
+  checkPassword,
+  passwordHash,
+  createUser,
+  audit,
+} from "./auth.mjs";
+import {
+  HttpError,
+  requirePermission,
+  approveDraft,
+  updatePlot,
+  getPlot,
+  publicPlot,
+} from "./inventory.mjs";
+import { contentSchemas } from "./content.mjs";
+import { presentationPlacementValid } from "../shared/presentation.mjs";
+import {
+  stageGeometry,
+  geographicToPlan,
+  planToGeographic,
+} from "./geometry.mjs";
+import sourceLayout from "../public/data/layout.json" with { type: "json" };
+import {
+  ownerAmenityReferences,
+  referenceFor,
+  referenceContains,
+  OWNER_AMENITY_SOURCE,
+} from "../shared/owner-amenity-references.mjs";
+import { stageImage, mediaFile } from "./media.mjs";
+const uuid = z.uuid();
+const json = (v) => JSON.stringify(v);
+export function createApp(
+  db,
+  {
+    origin = process.env.APP_ORIGIN || "http://127.0.0.1:5173",
+    demo = process.env.DEMO_MODE !== "false",
+    production = process.env.NODE_ENV === "production",
+    serveStatic = false,
+    logging = true,
+    mediaDirectory = process.env.MEDIA_DIRECTORY || ".local/media",
+  } = {},
+) {
+  const app = express();
+  app.disable("x-powered-by");
+  if (process.env.TRUST_PROXY_HOPS)
+    app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS));
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", "data:", "blob:"],
+          connectSrc: ["'self'"],
+          objectSrc: ["'none'"],
+          frameAncestors: ["'none'"],
+          upgradeInsecureRequests: production ? [] : null,
+        },
+      },
+      strictTransportSecurity: production ? undefined : false,
+    }),
+  );
+  app.use(compression());
+  app.use(express.json({ limit: "256kb" }));
+  app.use((req, res, next) => {
+    req.requestId = randomUUID();
+    res.set("X-Request-Id", req.requestId);
+    if (req.path.startsWith("/api")) res.set("Cache-Control", "no-store");
+    if (logging)
+      res.on("finish", () =>
+        console.info(
+          json({
+            requestId: req.requestId,
+            method: req.method,
+            route: req.route?.path || "unmatched",
+            status: res.statusCode,
+          }),
+        ),
+      );
+    next();
+  });
+  app.use("/api", async (req, res, next) => {
+    if (
+      !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
+      req.get("origin") !== origin
+    )
+      throw new HttpError(403, "Request origin is not allowed");
+    const token = req.headers.cookie
+      ?.split(";")
+      .map((s) => s.trim())
+      .find((s) => s.startsWith("sm_session="))
+      ?.slice(11);
+    if (token) {
+      const s = (
+        await db.query(
+          "SELECT s.csrf,u.id,u.email,u.name,u.role FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now() AND u.active=true",
+          [hash(token)],
+        )
+      ).rows[0];
+      if (s) req.user = s;
+    }
+    if (
+      !["GET", "HEAD"].includes(req.method) &&
+      req.path.startsWith("/admin") &&
+      (!req.user || req.get("x-csrf-token") !== req.user.csrf)
+    )
+      throw new HttpError(req.user ? 403 : 401, "Sign in and refresh the page");
+    next();
+  });
+  async function rate(req, scope, limit) {
+    const key = hash(`${scope}:${req.ip}`);
+    const r = await db.query(
+      "INSERT INTO rate_limits(key,hits,reset_at) VALUES($1,1,now()+interval '15 minutes') ON CONFLICT(key) DO UPDATE SET hits=CASE WHEN rate_limits.reset_at<now() THEN 1 ELSE rate_limits.hits+1 END,reset_at=CASE WHEN rate_limits.reset_at<now() THEN now()+interval '15 minutes' ELSE rate_limits.reset_at END RETURNING hits",
+      [key],
+    );
+    if (r.rows[0].hits > limit)
+      throw new HttpError(
+        429,
+        "Too many attempts. Please try again in 15 minutes.",
+      );
+  }
+  async function idempotent(req, scope, fn) {
+    const key = z
+      .string()
+      .min(16)
+      .max(100)
+      .regex(/^[a-zA-Z0-9-]+$/)
+      .parse(req.get("Idempotency-Key"));
+    const digest = hash(json(req.body));
+    return db.transaction(async (tx) => {
+      // A transaction-scoped advisory lock serializes duplicate retries on PostgreSQL.
+      await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+        `${scope}:${key}`,
+      ]);
+      const cached = (
+        await tx.query("SELECT * FROM idempotency WHERE scope=$1 AND key=$2", [
+          scope,
+          key,
+        ])
+      ).rows[0];
+      if (cached) {
+        if (cached.request_hash !== digest)
+          throw new HttpError(
+            409,
+            "This retry key was used with different data",
+          );
+        return cached.response;
+      }
+      const result = await fn(tx);
+      await tx.query(
+        "INSERT INTO idempotency(scope,key,request_hash,response) VALUES($1,$2,$3,$4)",
+        [scope, key, digest, json(result)],
+      );
+      return result;
+    });
+  }
+  const auth = (action) => {
+    return (req, res, next) => {
+      requirePermission(req.user, action);
+      next();
+    };
+  };
+  app.get("/api/health", async (req, res) => {
+    await db.query("SELECT 1");
+    res.json({
+      ok: true,
+      mode: demo ? "local-demo" : "connected",
+      storage: db.kind,
+    });
+  });
+  app.get("/api/public/project", async (req, res) => {
+    const items = (
+      await db.query(
+        "SELECT id,kind,published FROM content WHERE published IS NOT NULL",
+      )
+    ).rows;
+    const publicMappings = items.some((item) => item.kind === "presentation")
+      ? new Map(
+          (
+            await db.query(
+              "SELECT p.id,g.draft_id FROM plots p JOIN plot_geometry g ON g.plot_id=p.id WHERE p.publication='published'",
+            )
+          ).rows.map((row) => [row.id, row.draft_id]),
+        )
+      : new Map();
+    res.json({
+      mode: demo ? "local-demo" : "connected",
+      items: items
+        .filter(
+          (item) =>
+            item.kind !== "amenity" || item.published.customerVisible !== false,
+        )
+        .map((item) =>
+          item.kind === "presentation"
+            ? {
+                ...item,
+                published: {
+                  ...item.published,
+                  placements: item.published.placements.filter(
+                    (entry) =>
+                      publicMappings.get(entry.plotId) === entry.geometryId,
+                  ),
+                },
+              }
+            : item.kind === "amenity" && item.published.location
+              ? {
+                  ...item,
+                  published: {
+                    ...item.published,
+                    mapPoint: geographicToPlan(item.published.location),
+                  },
+                }
+              : item,
+        ),
+    });
+  });
+  app.get("/api/public/media/:name", async (req, res, next) => {
+    const path = mediaFile(mediaDirectory, req.params.name);
+    const url = `/api/public/media/${req.params.name}`;
+    const reference = await db.query(
+      `SELECT id FROM content WHERE published IS NOT NULL AND
+      ((kind='amenity' AND COALESCE(published->>'customerVisible','true')='true' AND published->>'imageUrl'=$1)
+       OR (kind='media' AND published->>'url'=$1)) LIMIT 1`,
+      [url],
+    );
+    if (!reference.rows.length) throw new HttpError(404, "Image not found");
+    res.type(
+      req.params.name.endsWith(".jpg")
+        ? "image/jpeg"
+        : req.params.name.endsWith(".png")
+          ? "image/png"
+          : "image/webp",
+    );
+    res.sendFile(path, (error) => {
+      if (error) next(new HttpError(404, "Image not found"));
+    });
+  });
+  app.post(
+    "/api/admin/media",
+    auth("content"),
+    express.raw({
+      type: ["image/png", "image/jpeg", "image/webp"],
+      limit: "2mb",
+    }),
+    async (req, res) => {
+      await rate(req, "media", 30);
+      const image = await stageImage(
+        mediaDirectory,
+        req.body,
+        req.get("content-type"),
+      );
+      await db.transaction((tx) =>
+        audit(
+          tx,
+          req.user,
+          "media.stage",
+          image.name,
+          null,
+          { type: image.type, size: image.size },
+          "Owner staged an image for content review",
+        ),
+      );
+      res.status(201).json(image);
+    },
+  );
+  app.get("/api/admin/media/:name", auth("content"), async (req, res, next) => {
+    const path = mediaFile(mediaDirectory, req.params.name);
+    res.type(
+      req.params.name.endsWith(".jpg")
+        ? "image/jpeg"
+        : req.params.name.endsWith(".png")
+          ? "image/png"
+          : "image/webp",
+    );
+    res.sendFile(path, (error) => {
+      if (error) next(new HttpError(404, "Image not found"));
+    });
+  });
+  app.get("/api/public/plots", async (req, res) => {
+    const {
+      limit,
+      offset,
+      q,
+      block,
+      status,
+      type,
+      facing,
+      phase,
+      corner,
+      minArea,
+      maxArea,
+      minRoad,
+      maxPrice,
+    } = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(600).default(600),
+        offset: z.coerce.number().int().min(0).default(0),
+        q: z.string().trim().max(100).optional(),
+        block: z.string().trim().max(80).optional(),
+        status: z
+          .enum(["unverified", "available", "reserved", "sold", "blocked"])
+          .optional(),
+        type: z
+          .enum(["not_provided", "residential", "commercial", "mixed"])
+          .optional(),
+        facing: z.enum(["N", "NE", "E", "SE", "S", "SW", "W", "NW"]).optional(),
+        phase: z.string().trim().max(80).optional(),
+        corner: z.enum(["yes", "no"]).optional(),
+        minArea: z.coerce.number().nonnegative().optional(),
+        maxArea: z.coerce.number().nonnegative().optional(),
+        minRoad: z.coerce.number().nonnegative().optional(),
+        maxPrice: z.coerce.number().nonnegative().optional(),
+      })
+      .parse(req.query);
+    const values = [],
+      where = ["p.publication='published'"];
+    const add = (expression, value) => {
+      values.push(value);
+      where.push(expression.replace("?", `$${values.length}`));
+    };
+    if (q)
+      add(
+        "position(? in replace(lower(p.number || ' ' || p.block || ' ' || COALESCE(p.data->>'phase','')),' ','')) > 0",
+        q.toLowerCase().replace(/\s+/g, ""),
+      );
+    if (block) add("p.block=?", block);
+    if (status) add("p.status=?", status);
+    if (type) add("p.data->>'plotType'=?", type);
+    if (facing) add("p.data->>'facing'=?", facing);
+    if (phase) add("p.data->>'phase'=?", phase);
+    if (corner) add("p.data->>'corner'=?", corner === "yes" ? "true" : "false");
+    if (minArea != null)
+      add(
+        "COALESCE((p.data->>'areaSqM')::numeric,(d.data->>'areaSqMApprox')::numeric)>=?",
+        minArea,
+      );
+    if (maxArea != null)
+      add(
+        "COALESCE((p.data->>'areaSqM')::numeric,(d.data->>'areaSqMApprox')::numeric)<=?",
+        maxArea,
+      );
+    if (minRoad != null)
+      add("(p.data->>'roadWidthMetres')::numeric>=?", minRoad);
+    if (maxPrice != null) add("p.price_visible AND p.price_inr<=?", maxPrice);
+    const from = `FROM plots p JOIN plot_geometry g ON g.plot_id=p.id JOIN draft_cells d ON d.id=g.draft_id LEFT JOIN (SELECT plot_id,max(created_at) AS status_updated_at FROM inventory_status_history GROUP BY plot_id) h ON h.plot_id=p.id WHERE ${where.join(" AND ")}`;
+    const rows = (
+      await db.query(
+        `SELECT p.*,g.draft_id,g.revision_id,d.data AS geometry,h.status_updated_at ${from} ORDER BY p.block,p.number,p.id LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+        [...values, limit, offset],
+      )
+    ).rows;
+    const plots = rows.map(publicPlot);
+    res.json({
+      plots,
+      offset,
+      limit,
+      total: Number(
+        (await db.query(`SELECT count(*) ${from}`, values)).rows[0].count,
+      ),
+      version: plots.map((p) => `${p.id}:${p.version}`).join("|"),
+      demo,
+    });
+  });
+  app.get("/api/public/plots/:id", async (req, res) => {
+    uuid.parse(req.params.id);
+    const p = await getPlot(db, req.params.id);
+    if (!p || p.publication !== "published")
+      throw new HttpError(
+        404,
+        "This plot is not published or is no longer available to view",
+      );
+    res.json(publicPlot(p));
+  });
+  app.get("/api/public/geometry", async (req, res) => {
+    res.json({
+      mappings: (
+        await db.query(
+          "SELECT g.* FROM plot_geometry g JOIN plots p ON p.id=g.plot_id WHERE p.publication='published'",
+        )
+      ).rows,
+    });
+  });
+  for (const isVisit of [false, true])
+    app.post(
+      isVisit ? "/api/visit-requests" : "/api/enquiries",
+      async (req, res) => {
+        const input = contactSchema.parse(req.body);
+        if (
+          isVisit &&
+          (!input.preferredAt || new Date(input.preferredAt) <= new Date())
+        )
+          throw new HttpError(
+            422,
+            "Choose a future visit date and time (Asia/Kolkata)",
+          );
+        await rate(req, "contact", 12);
+        const result = await idempotent(
+          req,
+          isVisit ? "visit" : "enquiry",
+          async (tx) => {
+            const contexts = [];
+            for (const id of input.plotIds) {
+              let p;
+              if (z.uuid().safeParse(id).success) {
+                p = await getPlot(tx, id);
+                if (!p || p.publication !== "published")
+                  throw new HttpError(
+                    409,
+                    "A selected plot changed. Reopen the explorer and check it.",
+                  );
+                contexts.push({
+                  id,
+                  label: p.number,
+                  status: p.status,
+                  version: p.version,
+                  kind: "approved",
+                });
+              } else {
+                const d = (
+                  await tx.query("SELECT data FROM draft_cells WHERE id=$1", [
+                    id,
+                  ])
+                ).rows[0];
+                if (!demo || !d)
+                  throw new HttpError(422, "Select a published plot");
+                contexts.push({
+                  id,
+                  label: d.data.label,
+                  status: "unverified",
+                  kind: "draft",
+                });
+              }
+            }
+            const id = randomUUID();
+            const { website: _, ...privateData } = input;
+            await tx.query("INSERT INTO enquiries(id,data) VALUES($1,$2)", [
+              id,
+              json({
+                ...privateData,
+                plots: contexts,
+                consentVersion: "2026-11-01",
+                consentAt: new Date().toISOString(),
+              }),
+            ]);
+            let visitId = null;
+            if (isVisit) {
+              visitId = randomUUID();
+              await tx.query(
+                "INSERT INTO visit_requests(id,enquiry_id,preferred_at) VALUES($1,$2,$3)",
+                [visitId, id, input.preferredAt],
+              );
+            }
+            await audit(
+              tx,
+              null,
+              isVisit ? "visit.request" : "enquiry.create",
+              visitId || id,
+              null,
+              { reference: id },
+              "Visitor consented to contact about this request",
+            );
+            return {
+              reference: id,
+              visitId,
+              status: isVisit ? "requested" : "received",
+              mode: demo ? "local-demo" : "connected",
+              message: demo
+                ? "Saved to the local development database. No notification was sent."
+                : isVisit
+                  ? "Visit requested. The team must confirm the slot."
+                  : "Enquiry accepted by the server. No plot is reserved.",
+            };
+          },
+        );
+        res.status(201).json(result);
+      },
+    );
+  app.post("/api/auth/login", async (req, res) => {
+    await rate(req, "login", 10);
+    const input = z
+      .object({ email: z.email(), password: z.string().min(1).max(256) })
+      .strict()
+      .parse(req.body);
+    const user = (
+      await db.query("SELECT * FROM users WHERE email=$1 AND active=true", [
+        input.email.toLowerCase(),
+      ])
+    ).rows[0];
+    // Always perform a password derivation, including unknown accounts.
+    const valid = await checkPassword(
+      input.password,
+      user?.password_hash || `${"0".repeat(32)}:${"0".repeat(128)}`,
+    );
+    if (!user || !valid)
+      throw new HttpError(401, "Email or password is incorrect");
+    const token = randomBytes(32).toString("hex"),
+      csrf = randomBytes(24).toString("hex");
+    await db.query(
+      "INSERT INTO sessions(token_hash,user_id,csrf,expires_at) VALUES($1,$2,$3,now()+interval '8 hours')",
+      [hash(token), user.id, csrf],
+    );
+    res.cookie("sm_session", token, {
+      httpOnly: true,
+      sameSite: "strict",
+      secure: production,
+      maxAge: 8 * 3600000,
+      path: "/api",
+    });
+    res.json({ id: user.id, name: user.name, role: user.role, csrf });
+  });
+  app.get("/api/auth/session", (req, res) => {
+    if (!req.user) throw new HttpError(401, "Sign in first");
+    res.json(req.user);
+  });
+  app.post("/api/admin/logout", async (req, res) => {
+    if (req.user) {
+      await db.query("DELETE FROM sessions WHERE user_id=$1", [req.user.id]);
+    }
+    res.clearCookie("sm_session", {
+      path: "/api",
+      sameSite: "strict",
+      secure: production,
+      httpOnly: true,
+    });
+    res.json({ ok: true });
+  });
+  app.post("/api/admin/password", async (req, res) => {
+    const v = z
+      .object({
+        currentPassword: z.string().min(1).max(256),
+        newPassword: z.string().min(14).max(256),
+      })
+      .strict()
+      .parse(req.body);
+    await rate(req, "password", 5);
+    const row = (
+      await db.query("SELECT password_hash FROM users WHERE id=$1", [
+        req.user.id,
+      ])
+    ).rows[0];
+    if (!(await checkPassword(v.currentPassword, row.password_hash)))
+      throw new HttpError(401, "Current password is incorrect");
+    const encoded = await passwordHash(v.newPassword);
+    await db.transaction(async (tx) => {
+      await tx.query("UPDATE users SET password_hash=$1 WHERE id=$2", [
+        encoded,
+        req.user.id,
+      ]);
+      await tx.query("DELETE FROM sessions WHERE user_id=$1", [req.user.id]);
+      await audit(
+        tx,
+        req.user,
+        "user.password",
+        req.user.id,
+        null,
+        null,
+        "Staff member changed password; sessions revoked",
+      );
+    });
+    res.clearCookie("sm_session", { path: "/api" });
+    res.json({ ok: true });
+  });
+  app.post(
+    "/api/admin/users/:id/reset-password",
+    auth("access"),
+    async (req, res) => {
+      uuid.parse(req.params.id);
+      const v = z
+        .object({ newPassword: z.string().min(14).max(256), reason })
+        .strict()
+        .parse(req.body);
+      const encoded = await passwordHash(v.newPassword);
+      await db.transaction(async (tx) => {
+        const r = await tx.query(
+          "UPDATE users SET password_hash=$1 WHERE id=$2 RETURNING id",
+          [encoded, req.params.id],
+        );
+        if (!r.rows.length) throw new HttpError(404, "User not found");
+        await tx.query("DELETE FROM sessions WHERE user_id=$1", [
+          req.params.id,
+        ]);
+        await audit(
+          tx,
+          req.user,
+          "user.password-reset",
+          req.params.id,
+          null,
+          null,
+          v.reason,
+        );
+      });
+      res.json({ ok: true });
+    },
+  );
+  app.get("/api/admin/overview", async (req, res) => {
+    if (!req.user) throw new HttpError(401, "Sign in first");
+    const counts = {
+      published: Number(
+        (
+          await db.query(
+            "SELECT count(*) FROM plots WHERE publication='published'",
+          )
+        ).rows[0].count,
+      ),
+      drafts: Number(
+        (await db.query("SELECT count(*) FROM plots WHERE publication='draft'"))
+          .rows[0].count,
+      ),
+    };
+    if (can(req.user.role, "leads")) {
+      counts.newEnquiries = Number(
+        (await db.query("SELECT count(*) FROM enquiries WHERE stage='new'"))
+          .rows[0].count,
+      );
+      counts.dueFollowUps = Number(
+        (
+          await db.query(
+            "SELECT count(*) FROM enquiries WHERE stage <> 'closed' AND next_action_at IS NOT NULL AND next_action_at <= now()",
+          )
+        ).rows[0].count,
+      );
+      counts.requestedVisits = Number(
+        (
+          await db.query(
+            "SELECT count(*) FROM visit_requests WHERE status='requested'",
+          )
+        ).rows[0].count,
+      );
+      counts.confirmedVisits = Number(
+        (
+          await db.query(
+            "SELECT count(*) FROM visit_requests WHERE status='confirmed'",
+          )
+        ).rows[0].count,
+      );
+    }
+    res.json({
+      mode: demo ? "local-demo" : "connected",
+      role: req.user.role,
+      counts,
+    });
+  });
+  app.get("/api/admin/review", auth("review"), async (req, res) => {
+    res.json({
+      cells: (
+        await db.query(
+          "SELECT d.*,g.plot_id FROM draft_cells d LEFT JOIN plot_geometry g ON g.draft_id=d.id ORDER BY d.id",
+        )
+      ).rows,
+    });
+  });
+  app.get("/api/admin/plots", async (req, res) => {
+    if (!req.user) throw new HttpError(401, "Sign in first");
+    const list = (
+      await db.query(
+        "SELECT p.*,g.draft_id,g.revision_id,d.data AS geometry FROM plots p JOIN plot_geometry g ON g.plot_id=p.id JOIN draft_cells d ON d.id=g.draft_id ORDER BY p.block,p.number",
+      )
+    ).rows;
+    res.json({ plots: list });
+  });
+  app.post("/api/admin/reconcile", auth("review"), async (req, res) => {
+    const input = z
+      .object({ draftId: z.string().max(150), data: approvedDataSchema })
+      .strict()
+      .parse(req.body);
+    res
+      .status(201)
+      .json(
+        await idempotent(req, `reconcile:${req.user.id}`, (tx) =>
+          approveDraft(tx, req.user, input.draftId, input.data),
+        ),
+      );
+  });
+  app.patch("/api/admin/plots/:id", async (req, res) => {
+    uuid.parse(req.params.id);
+    res.json(
+      await idempotent(req, `plot:${req.user.id}:${req.params.id}`, (tx) =>
+        updatePlot(tx, req.user, req.params.id, req.body),
+      ),
+    );
+  });
+  app.get("/api/admin/enquiries", auth("leads"), async (req, res) => {
+    const { limit, offset } = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+        offset: z.coerce.number().int().min(0).default(0),
+      })
+      .parse(req.query);
+    res.json({
+      enquiries: (
+        await db.query(
+          "SELECT * FROM enquiries ORDER BY created_at DESC,id DESC LIMIT $1 OFFSET $2",
+          [limit, offset],
+        )
+      ).rows,
+      visits: (
+        await db.query(
+          "SELECT v.*,e.data AS enquiry_data FROM visit_requests v JOIN enquiries e ON e.id=v.enquiry_id ORDER BY v.preferred_at DESC,v.id DESC LIMIT $1 OFFSET $2",
+          [limit, offset],
+        )
+      ).rows,
+      enquiriesTotal: Number(
+        (await db.query("SELECT count(*) FROM enquiries")).rows[0].count,
+      ),
+      visitsTotal: Number(
+        (await db.query("SELECT count(*) FROM visit_requests")).rows[0].count,
+      ),
+      staff: (
+        await db.query(
+          "SELECT id,name FROM users WHERE active=true AND role IN ('owner','administrator','sales') ORDER BY name,id",
+        )
+      ).rows,
+      limit,
+      offset,
+    });
+  });
+  app.patch("/api/admin/enquiries/:id", auth("leads"), async (req, res) => {
+    uuid.parse(req.params.id);
+    const change = z
+      .object({
+        expectedVersion: z.number().int(),
+        stage: z.enum(["new", "contacted", "qualified", "closed"]),
+        notes: z.string().max(4000),
+        assignedTo: uuid.nullable(),
+        nextActionAt: z.string().datetime({ offset: true }).nullable(),
+        reason,
+      })
+      .strict()
+      .parse(req.body);
+    res.json(
+      await idempotent(
+        req,
+        `lead:${req.user.id}:${req.params.id}`,
+        async (tx) => {
+          const old = (
+            await tx.query("SELECT * FROM enquiries WHERE id=$1", [
+              req.params.id,
+            ])
+          ).rows[0];
+          if (!old) throw new HttpError(404, "Enquiry not found");
+          if (change.assignedTo) {
+            const assignee = (
+              await tx.query(
+                "SELECT role FROM users WHERE id=$1 AND active=true",
+                [change.assignedTo],
+              )
+            ).rows[0];
+            if (!assignee || !can(assignee.role, "leads"))
+              throw new HttpError(
+                422,
+                "Assignee must be active sales staff or an administrator",
+              );
+          }
+          const r = await tx.query(
+            "UPDATE enquiries SET stage=$1,notes=$2,assigned_to=$3,next_action_at=$4,version=version+1 WHERE id=$5 AND version=$6 RETURNING *",
+            [
+              change.stage,
+              change.notes,
+              change.assignedTo,
+              change.nextActionAt,
+              req.params.id,
+              change.expectedVersion,
+            ],
+          );
+          if (!r.rows.length)
+            throw new HttpError(409, "Enquiry changed; reload it");
+          // Audit lead operations without duplicating buyer contact/notes in permanent history.
+          await audit(
+            tx,
+            req.user,
+            "enquiry.update",
+            req.params.id,
+            {
+              stage: old.stage,
+              assignedTo: old.assigned_to,
+              nextActionAt: old.next_action_at,
+            },
+            {
+              stage: change.stage,
+              assignedTo: change.assignedTo,
+              nextActionAt: change.nextActionAt,
+              notesChanged: old.notes !== change.notes,
+            },
+            change.reason,
+          );
+          return r.rows[0];
+        },
+      ),
+    );
+  });
+  app.patch("/api/admin/visits/:id", auth("leads"), async (req, res) => {
+    uuid.parse(req.params.id);
+    const change = z
+      .object({
+        expectedVersion: z.number().int(),
+        status: z.enum(visitStatuses),
+        scheduledAt: z.string().datetime({ offset: true }).nullable(),
+        reason,
+      })
+      .strict()
+      .parse(req.body);
+    const allowed = {
+      requested: ["contacted", "confirmed", "cancelled"],
+      contacted: ["confirmed", "rescheduled", "cancelled"],
+      confirmed: ["completed", "no_show", "rescheduled", "cancelled"],
+      rescheduled: ["confirmed", "completed", "no_show", "cancelled"],
+      completed: [],
+      no_show: [],
+      cancelled: [],
+    };
+    res.json(
+      await idempotent(
+        req,
+        `visit-edit:${req.user.id}:${req.params.id}`,
+        async (tx) => {
+          const old = (
+            await tx.query("SELECT * FROM visit_requests WHERE id=$1", [
+              req.params.id,
+            ])
+          ).rows[0];
+          if (!old) throw new HttpError(404, "Visit not found");
+          if (!allowed[old.status].includes(change.status))
+            throw new HttpError(
+              422,
+              `Cannot change ${old.status} to ${change.status}`,
+            );
+          if (
+            ["confirmed", "rescheduled", "completed", "no_show"].includes(
+              change.status,
+            ) &&
+            !change.scheduledAt
+          )
+            throw new HttpError(422, "An agreed slot is required");
+          if (
+            ["confirmed", "rescheduled"].includes(change.status) &&
+            new Date(change.scheduledAt) <= new Date()
+          )
+            throw new HttpError(422, "Choose a future agreed slot");
+          if (
+            ["completed", "no_show"].includes(change.status) &&
+            (!old.scheduled_at ||
+              new Date(change.scheduledAt).getTime() !==
+                new Date(old.scheduled_at).getTime())
+          )
+            throw new HttpError(
+              422,
+              "An outcome must use the existing agreed slot",
+            );
+          if (
+            change.status === "no_show" &&
+            new Date(old.scheduled_at) > new Date()
+          )
+            throw new HttpError(
+              422,
+              "A future visit cannot yet be marked no-show",
+            );
+          const r = await tx.query(
+            "UPDATE visit_requests SET status=$1,scheduled_at=$2,version=version+1 WHERE id=$3 AND version=$4 RETURNING *",
+            [
+              change.status,
+              change.scheduledAt,
+              req.params.id,
+              change.expectedVersion,
+            ],
+          );
+          if (!r.rows.length)
+            throw new HttpError(409, "Visit changed; reload it");
+          await audit(
+            tx,
+            req.user,
+            "visit.update",
+            req.params.id,
+            old,
+            r.rows[0],
+            change.reason,
+          );
+          return r.rows[0];
+        },
+      ),
+    );
+  });
+  app.get("/api/admin/audit", auth("audit"), async (req, res) => {
+    const { limit, offset, entity } = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+        offset: z.coerce.number().int().min(0).default(0),
+        entity: z.string().trim().max(150).optional(),
+      })
+      .parse(req.query);
+    res.json({
+      events: (
+        await db.query(
+          "SELECT a.*,u.name AS actor_name FROM audit_logs a LEFT JOIN users u ON a.actor_id=u.id WHERE ($1::text IS NULL OR entity_id=$1) ORDER BY a.created_at DESC,a.id DESC LIMIT $2 OFFSET $3",
+          [entity || null, limit, offset],
+        )
+      ).rows,
+      total: Number(
+        (
+          await db.query(
+            "SELECT count(*) FROM audit_logs WHERE ($1::text IS NULL OR entity_id=$1)",
+            [entity || null],
+          )
+        ).rows[0].count,
+      ),
+      limit,
+      offset,
+    });
+  });
+  app.get("/api/admin/content", auth("content"), async (req, res) =>
+    res.json({
+      items: (await db.query("SELECT * FROM content ORDER BY kind,id")).rows,
+    }),
+  );
+  app.get("/api/admin/presentation", auth("content"), async (req, res) => {
+    const item =
+      (
+        await db.query(
+          "SELECT * FROM content WHERE id='illustrated-layout' AND kind='presentation'",
+        )
+      ).rows[0] || null;
+    const plots = (
+      await db.query(
+        "SELECT p.id,p.number,p.block,p.publication,g.draft_id,d.data AS geometry FROM plots p JOIN plot_geometry g ON g.plot_id=p.id JOIN draft_cells d ON d.id=g.draft_id ORDER BY p.block,p.number",
+      )
+    ).rows;
+    res.json({ item, plots });
+  });
+  app.post(
+    "/api/admin/amenity-references/stage",
+    auth("content"),
+    async (req, res) => {
+      const input = z.object({ reason }).strict().parse(req.body);
+      res.json(
+        await idempotent(
+          req,
+          `amenity-references:${req.user.id}`,
+          async (tx) => {
+            const created = [],
+              existing = [];
+            for (const ref of ownerAmenityReferences) {
+              if (!referenceContains(sourceLayout, ref, ref.mapPoint))
+                throw new HttpError(500, "Reference area mismatch");
+              const draft = contentSchemas.amenity.parse({
+                title: ref.title,
+                titleHi: ref.titleHi,
+                category: ref.category,
+                description:
+                  ref.description ||
+                  "Owner-indicated area. Exact placement and current status need confirmation.",
+                descriptionHi:
+                  ref.descriptionHi ||
+                  "स्वामी द्वारा संकेतित क्षेत्र। सटीक स्थान और वर्तमान स्थिति की पुष्टि बाकी है।",
+                location: planToGeographic(ref.mapPoint),
+                placementPrecision: "approximate",
+                visualScale: 1,
+                visualRotation: ref.visualRotation,
+                customerVisible: false,
+                imageUrl: ref.image ? `/assets/concepts/${ref.image}` : "",
+                imageKind: "concept",
+                state: ref.state || "confirmation_pending",
+                source: ref.source || OWNER_AMENITY_SOURCE,
+                verifiedAt: null,
+              });
+              const saved = await tx.query(
+                "INSERT INTO content(id,kind,draft) VALUES($1,'amenity',$2) ON CONFLICT(id) DO NOTHING RETURNING id",
+                [ref.id, json(draft)],
+              );
+              if (!saved.rows.length) {
+                existing.push(ref.id);
+                continue;
+              }
+              created.push(ref.id);
+              await audit(
+                tx,
+                req.user,
+                "amenity.reference.stage",
+                ref.id,
+                null,
+                { draft },
+                input.reason,
+              );
+            }
+            return { created, existing };
+          },
+        ),
+      );
+    },
+  );
+  app.put("/api/admin/content/:id", auth("content"), async (req, res) => {
+    const body = z
+      .object({
+        kind: z.enum(["setting", "amenity", "media", "nearby", "presentation"]),
+        data: z.unknown(),
+        expectedVersion: z.number().int().min(0),
+        publish: z.boolean(),
+        reason,
+      })
+      .strict()
+      .parse(req.body);
+    const data = contentSchemas[body.kind].parse(body.data);
+    const reference = referenceFor(req.params.id);
+    if (reference && body.kind !== "amenity")
+      throw new HttpError(
+        422,
+        "This ID is reserved for its owner-indicated amenity",
+      );
+    if (
+      reference &&
+      data.location &&
+      !referenceContains(
+        sourceLayout,
+        reference,
+        geographicToPlan(data.location),
+      )
+    )
+      throw new HttpError(
+        422,
+        "Keep this marker inside the owner-indicated plan area; review an amended source if the area changes.",
+      );
+    if (!/^[a-z0-9-]{1,80}$/.test(req.params.id))
+      throw new HttpError(422, "Use a short lowercase content ID");
+    if (body.kind === "setting" && req.params.id !== "project")
+      throw new HttpError(422, "Project settings use the project ID");
+    if (
+      (body.kind === "presentation") !==
+      (req.params.id === "illustrated-layout")
+    )
+      throw new HttpError(
+        422,
+        "The illustrated-layout ID is reserved for presentation settings",
+      );
+    if (body.publish) {
+      requirePermission(req.user, "publish");
+      if (body.kind === "setting" ? !data.verified : !data.verifiedAt)
+        throw new HttpError(
+          422,
+          "Confirm source and verification before publishing",
+        );
+    }
+    res.json(
+      await idempotent(
+        req,
+        `content:${req.user.id}:${req.params.id}`,
+        async (tx) => {
+          const old = (
+            await tx.query("SELECT * FROM content WHERE id=$1", [req.params.id])
+          ).rows[0];
+          if ((old?.version || 0) !== body.expectedVersion)
+            throw new HttpError(409, "Content changed; reload it");
+          if (old && old.kind !== body.kind)
+            throw new HttpError(422, "Content kind cannot change");
+          if (body.kind === "presentation") {
+            if (
+              body.publish &&
+              (!old ||
+                !(
+                  await tx.query("SELECT $1::jsonb = $2::jsonb AS same", [
+                    json(old.draft),
+                    json(data),
+                  ])
+                ).rows[0].same)
+            )
+              throw new HttpError(
+                422,
+                "Save the presentation draft before reviewing and publishing it",
+              );
+            const records = (
+              await tx.query(
+                "SELECT p.id,p.publication,g.draft_id,d.data AS geometry FROM plots p JOIN plot_geometry g ON g.plot_id=p.id JOIN draft_cells d ON d.id=g.draft_id",
+              )
+            ).rows;
+            const byId = new Map(records.map((record) => [record.id, record]));
+            for (const placement of data.placements) {
+              const record = byId.get(placement.plotId);
+              if (!record || record.draft_id !== placement.geometryId)
+                throw new HttpError(
+                  422,
+                  "Plot mapping changed or is unknown; review it again",
+                );
+              if (!presentationPlacementValid(record.geometry, placement))
+                throw new HttpError(
+                  422,
+                  "A visual placement has invalid presentation coordinates",
+                );
+              if (body.publish && record.publication !== "published")
+                throw new HttpError(
+                  422,
+                  "Publish the reviewed plot before its visual placement",
+                );
+            }
+          }
+          const r = old
+            ? await tx.query(
+                "UPDATE content SET draft=$1,published=$2,version=version+1,updated_at=now() WHERE id=$3 AND version=$4 RETURNING *",
+                [
+                  json(data),
+                  body.publish
+                    ? json(data)
+                    : body.kind === "presentation" && old.published
+                      ? json(old.published)
+                      : null,
+                  req.params.id,
+                  body.expectedVersion,
+                ],
+              )
+            : await tx.query(
+                "INSERT INTO content(id,kind,draft,published) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO NOTHING RETURNING *",
+                [
+                  req.params.id,
+                  body.kind,
+                  json(data),
+                  body.publish ? json(data) : null,
+                ],
+              );
+          if (!r.rows.length)
+            throw new HttpError(409, "Content changed; reload it");
+          await audit(
+            tx,
+            req.user,
+            "content.update",
+            req.params.id,
+            old,
+            r.rows[0],
+            body.reason,
+          );
+          return r.rows[0];
+        },
+      ),
+    );
+  });
+  app.get("/api/admin/users", auth("access"), async (req, res) =>
+    res.json({
+      users: (
+        await db.query(
+          "SELECT id,email,name,role,active FROM users ORDER BY name",
+        )
+      ).rows,
+    }),
+  );
+  app.post("/api/admin/users", auth("access"), async (req, res) => {
+    const v = z
+      .object({
+        email: z.email(),
+        name: z.string().min(2).max(100),
+        password: z.string().min(14).max(256),
+        role: z.enum(roles),
+      })
+      .strict()
+      .parse(req.body);
+    const id = await db.transaction(async (tx) => {
+      const id = await createUser(tx, v);
+      await audit(
+        tx,
+        req.user,
+        "user.create",
+        id,
+        null,
+        { email: v.email, role: v.role },
+        "Owner created staff access",
+      );
+      return id;
+    });
+    res.status(201).json({ id });
+  });
+  app.patch("/api/admin/users/:id", auth("access"), async (req, res) => {
+    uuid.parse(req.params.id);
+    const v = z
+      .object({ role: z.enum(roles), active: z.boolean(), reason })
+      .strict()
+      .parse(req.body);
+    if (req.params.id === req.user.id)
+      throw new HttpError(
+        422,
+        "Use another owner account to change your own access",
+      );
+    await db.transaction(async (tx) => {
+      const old = (
+        await tx.query("SELECT id,role,active FROM users WHERE id=$1", [
+          req.params.id,
+        ])
+      ).rows[0];
+      if (!old) throw new HttpError(404, "User not found");
+      await tx.query("UPDATE users SET role=$1,active=$2 WHERE id=$3", [
+        v.role,
+        v.active,
+        req.params.id,
+      ]);
+      await tx.query("DELETE FROM sessions WHERE user_id=$1", [req.params.id]);
+      await audit(tx, req.user, "user.access", req.params.id, old, v, v.reason);
+    });
+    res.json({ ok: true });
+  });
+  app.post("/api/admin/imports/preview", auth("review"), async (req, res) => {
+    const csv = z.string().min(1).max(200000).parse(req.body.csv);
+    let rows;
+    try {
+      rows = parse(csv, { columns: true, skip_empty_lines: true, bom: true });
+    } catch {
+      throw new HttpError(422, "Malformed CSV");
+    }
+    if (rows.length > 600) throw new HttpError(422, "Use at most 600 rows");
+    const errors = [],
+      valid = [],
+      seen = new Set();
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      try {
+        // Template source fields are evidence, never trusted authorisation. Imports stage identities only.
+        if (
+          (r.availability && r.availability !== "unverified") ||
+          r.priceINR ||
+          r.frontageFeet ||
+          r.depthFeet
+        )
+          throw Error(
+            "Import identities only; review inventory and named sides separately",
+          );
+        if (r.approvedPlotId)
+          throw Error(
+            "Existing IDs are immutable; update their records in Inventory",
+          );
+        if (!r.ownerReviewedAt || Number.isNaN(Date.parse(r.ownerReviewedAt)))
+          throw Error("A valid ownerReviewedAt date is required");
+        const data = approvedDataSchema.parse({
+          number: r.approvedPlotNumber,
+          block: r.approvedBlock,
+          sourceDocument: "Supplied north-oriented PDF",
+          sourceRevision: r.surveyDocumentRevision,
+          reviewNote: r.notes,
+          areaSqM: r.verifiedAreaSqFt
+            ? Number(r.verifiedAreaSqFt) * 0.09290304
+            : null,
+          areaSourceText: r.verifiedAreaSqFt
+            ? `${r.verifiedAreaSqFt} sq ft`
+            : "",
+        });
+        const key = `${data.block}|${data.number}`;
+        if (seen.has(key) || seen.has(r.draftGeometryId))
+          throw Error("Duplicate identity or geometry in this CSV");
+        seen.add(key);
+        seen.add(r.draftGeometryId);
+        const draftCell = (
+          await db.query("SELECT data FROM draft_cells WHERE id=$1", [
+            r.draftGeometryId,
+          ])
+        ).rows[0];
+        if (!draftCell) throw Error("Unknown draftGeometryId");
+        if (r.sourceBlock && r.sourceBlock !== draftCell.data.block)
+          throw Error("sourceBlock does not match the original plan reference");
+        if (
+          (
+            await db.query(
+              "SELECT plot_id FROM plot_geometry WHERE draft_id=$1",
+              [r.draftGeometryId],
+            )
+          ).rows.length
+        )
+          throw Error(
+            "Geometry is already mapped; existing approved IDs are preserved",
+          );
+        if (
+          (
+            await db.query(
+              "SELECT id FROM plots WHERE block=$1 AND number=$2",
+              [data.block, data.number],
+            )
+          ).rows.length
+        )
+          throw Error("Approved number already exists in this block");
+        valid.push({ draftId: r.draftGeometryId, data });
+      } catch (e) {
+        errors.push({
+          row: i + 2,
+          message:
+            e instanceof z.ZodError
+              ? e.issues
+                  .map((x) => `${x.path.join(".")}: ${x.message}`)
+                  .join("; ")
+              : e.message,
+        });
+      }
+    }
+    const id = randomUUID();
+    await db.query(
+      "INSERT INTO import_previews(id,actor_id,rows,errors,expires_at) VALUES($1,$2,$3,$4,now()+interval '30 minutes')",
+      [id, req.user.id, json(valid), json(errors)],
+    );
+    res.json({
+      id,
+      total: rows.length,
+      valid: valid.length,
+      errors,
+      rows: valid,
+    });
+  });
+  app.post("/api/admin/imports/commit", auth("review"), async (req, res) => {
+    const id = uuid.parse(req.body.previewId);
+    res.json(
+      await idempotent(req, `import:${req.user.id}`, async (tx) => {
+        const p = (
+          await tx.query(
+            "SELECT * FROM import_previews WHERE id=$1 FOR UPDATE",
+            [id],
+          )
+        ).rows[0];
+        if (!p || p.actor_id !== req.user.id)
+          throw new HttpError(404, "Preview not found");
+        if (
+          p.committed ||
+          new Date(p.expires_at) < new Date() ||
+          p.errors.length
+        )
+          throw new HttpError(
+            409,
+            "Preview expired, committed or contains errors",
+          );
+        const ids = [];
+        for (const row of p.rows)
+          ids.push(
+            (await approveDraft(tx, req.user, row.draftId, row.data)).id,
+          );
+        await tx.query(
+          "UPDATE import_previews SET committed=true WHERE id=$1",
+          [id],
+        );
+        await audit(
+          tx,
+          req.user,
+          "import.commit",
+          id,
+          null,
+          { ids },
+          "Validated CSV identities staged as drafts",
+        );
+        return { ids, publication: "draft" };
+      }),
+    );
+  });
+  app.get(
+    "/api/admin/inventory-imports/template",
+    auth("inventory"),
+    async (req, res) => {
+      const rows = (
+        await db.query(
+          "SELECT id,version FROM plots WHERE publication <> 'archived' ORDER BY block,number,id",
+        )
+      ).rows;
+      res
+        .type("text/csv")
+        .set(
+          "Content-Disposition",
+          'attachment; filename="inventory-update.csv"',
+        )
+        .send(
+          [
+            "approvedPlotId,expectedVersion,status,priceINR,priceVisible,reason",
+            ...rows.map((row) => `${row.id},${row.version},,,,`),
+          ].join("\n") + "\n",
+        );
+    },
+  );
+  app.post(
+    "/api/admin/inventory-imports/preview",
+    auth("inventory"),
+    async (req, res) => {
+      const csv = z.string().min(1).max(200000).parse(req.body.csv);
+      let rows;
+      try {
+        rows = parse(csv, {
+          columns: (headers) => {
+            const allowed = [
+              "approvedPlotId",
+              "expectedVersion",
+              "status",
+              "priceINR",
+              "priceVisible",
+              "reason",
+            ];
+            if (
+              new Set(headers).size !== headers.length ||
+              headers.some((h) => !allowed.includes(h)) ||
+              !["approvedPlotId", "expectedVersion", "reason"].every((h) =>
+                headers.includes(h),
+              )
+            )
+              throw Error(
+                "CSV headers must match the inventory template without duplicates",
+              );
+            return headers;
+          },
+          skip_empty_lines: true,
+          bom: true,
+          trim: true,
+        });
+      } catch (e) {
+        throw new HttpError(
+          422,
+          e.message.includes("CSV headers") ? e.message : "Malformed CSV",
+        );
+      }
+      if (!rows.length || rows.length > 600)
+        throw new HttpError(422, "Use 1–600 data rows");
+      const errors = [],
+        valid = [],
+        seen = new Set();
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        try {
+          const plotId = uuid.parse(row.approvedPlotId);
+          if (seen.has(plotId))
+            throw Error("Duplicate approved plot ID in this CSV");
+          seen.add(plotId);
+          if (!/^[1-9]\d*$/.test(row.expectedVersion || ""))
+            throw Error("A positive expectedVersion is required");
+          if (row.priceVisible && !["true", "false"].includes(row.priceVisible))
+            throw Error("priceVisible must be true, false or blank");
+          const change = plotEditSchema.parse({
+            expectedVersion: Number(row.expectedVersion),
+            reason: row.reason,
+            ...(row.status ? { status: row.status } : {}),
+            ...(row.priceINR
+              ? {
+                  priceINR:
+                    row.priceINR === "clear" ? null : Number(row.priceINR),
+                }
+              : {}),
+            ...(row.priceVisible
+              ? { priceVisible: row.priceVisible === "true" }
+              : {}),
+          });
+          if (
+            change.status === undefined &&
+            change.priceINR === undefined &&
+            change.priceVisible === undefined
+          )
+            throw Error("Provide a status, price or price visibility change");
+          const current = await getPlot(db, plotId);
+          if (!current) throw Error("Approved plot ID was not found");
+          if (current.version !== change.expectedVersion)
+            throw Error(
+              "Version changed; export current inventory and review again",
+            );
+          if (
+            change.status &&
+            change.status !== "unverified" &&
+            !current.verified_at
+          )
+            throw Error("Review the identity before setting inventory status");
+          if (
+            (change.priceVisible ?? current.price_visible) &&
+            (change.priceINR === undefined
+              ? current.price_inr
+              : change.priceINR) == null
+          )
+            throw Error("A visible price needs a price value");
+          valid.push({
+            kind: "inventory",
+            plotId,
+            number: current.number,
+            block: current.block,
+            before: {
+              status: current.status,
+              priceINR: current.price_inr,
+              priceVisible: current.price_visible,
+            },
+            change,
+          });
+        } catch (e) {
+          errors.push({
+            row: i + 2,
+            message:
+              e instanceof z.ZodError
+                ? e.issues
+                    .map((x) => `${x.path.join(".")}: ${x.message}`)
+                    .join("; ")
+                : e.message,
+          });
+        }
+      }
+      const id = randomUUID();
+      await db.query(
+        "INSERT INTO import_previews(id,actor_id,rows,errors,expires_at) VALUES($1,$2,$3,$4,now()+interval '30 minutes')",
+        [id, req.user.id, json(valid), json(errors)],
+      );
+      res.json({
+        id,
+        total: rows.length,
+        valid: valid.length,
+        errors,
+        rows: valid,
+      });
+    },
+  );
+  app.post(
+    "/api/admin/inventory-imports/commit",
+    auth("inventory"),
+    async (req, res) => {
+      const id = uuid.parse(req.body.previewId);
+      res.json(
+        await idempotent(req, `inventory-import:${req.user.id}`, async (tx) => {
+          const p = (
+            await tx.query(
+              "SELECT * FROM import_previews WHERE id=$1 FOR UPDATE",
+              [id],
+            )
+          ).rows[0];
+          if (!p || p.actor_id !== req.user.id)
+            throw new HttpError(404, "Preview not found");
+          if (
+            p.committed ||
+            new Date(p.expires_at) < new Date() ||
+            p.errors.length ||
+            !p.rows.length ||
+            p.rows.some((row) => row.kind !== "inventory")
+          )
+            throw new HttpError(
+              409,
+              "Preview expired, committed, invalid or contains errors",
+            );
+          const ids = [];
+          for (const row of p.rows) {
+            await updatePlot(tx, req.user, row.plotId, row.change);
+            ids.push(row.plotId);
+          }
+          await tx.query(
+            "UPDATE import_previews SET committed=true WHERE id=$1",
+            [id],
+          );
+          await audit(
+            tx,
+            req.user,
+            "inventory-import.commit",
+            id,
+            null,
+            { ids },
+            "Validated inventory CSV committed atomically",
+          );
+          return { ids, updated: ids.length };
+        }),
+      );
+    },
+  );
+  app.get("/api/admin/export", auth("review"), async (req, res) =>
+    res.json({
+      plots: (
+        await db.query(
+          "SELECT id,number,block,publication,status,version,data FROM plots",
+        )
+      ).rows,
+      mappings: (await db.query("SELECT * FROM plot_geometry")).rows,
+    }),
+  );
+  app.post("/api/admin/geometry-revisions", auth("review"), async (req, res) =>
+    res
+      .status(201)
+      .json(
+        await idempotent(req, `geometry-stage:${req.user.id}`, (tx) =>
+          stageGeometry(tx, req.user, req.body),
+        ),
+      ),
+  );
+  app.get("/api/admin/geometry-proposals", auth("review"), async (req, res) =>
+    res.json({
+      proposals: (
+        await db.query(
+          "SELECT * FROM geometry_proposals ORDER BY created_at DESC",
+        )
+      ).rows,
+    }),
+  );
+  app.post(
+    "/api/admin/geometry-proposals",
+    auth("review"),
+    async (req, res) => {
+      const v = z
+        .object({
+          plotId: uuid,
+          draftId: z.string().max(150),
+          expectedVersion: z.number().int().positive(),
+          reason,
+        })
+        .strict()
+        .parse(req.body);
+      const id = randomUUID();
+      await db.transaction(async (tx) => {
+        const p = await getPlot(tx, v.plotId);
+        if (!p || p.version !== v.expectedVersion)
+          throw new HttpError(409, "Reload this plot");
+        await tx.query(
+          "INSERT INTO geometry_proposals(id,plot_id,draft_id,expected_version,actor_id,reason) VALUES($1,$2,$3,$4,$5,$6)",
+          [id, v.plotId, v.draftId, v.expectedVersion, req.user.id, v.reason],
+        );
+        await audit(tx, req.user, "geometry.propose", id, null, v, v.reason);
+      });
+      res.status(201).json({ id });
+    },
+  );
+  app.post(
+    "/api/admin/geometry-proposals/:id/decide",
+    auth("publish"),
+    async (req, res) => {
+      uuid.parse(req.params.id);
+      const v = z
+        .object({ approve: z.boolean(), reason })
+        .strict()
+        .parse(req.body);
+      res.json(
+        await idempotent(
+          req,
+          `geometry:${req.user.id}:${req.params.id}`,
+          async (tx) => {
+            const g = (
+              await tx.query(
+                "SELECT * FROM geometry_proposals WHERE id=$1 FOR UPDATE",
+                [req.params.id],
+              )
+            ).rows[0];
+            if (!g || g.status !== "pending")
+              throw new HttpError(409, "Proposal is no longer pending");
+            if (v.approve) {
+              const p = await getPlot(tx, g.plot_id),
+                d = (
+                  await tx.query("SELECT * FROM draft_cells WHERE id=$1", [
+                    g.draft_id,
+                  ])
+                ).rows[0];
+              if (!p || p.version !== g.expected_version)
+                throw new HttpError(
+                  409,
+                  "Inventory changed; create a fresh proposal",
+                );
+              const revisedData = {
+                ...p.data,
+                dimensions: [],
+                areaSqM: null,
+                areaSourceText: "",
+                roadWidthMetres: null,
+                facing: null,
+                plotType: "not_provided",
+                phase: "",
+                corner: null,
+                parkFacing: null,
+                documentIds: [],
+              };
+              const result = await tx.query(
+                "UPDATE plots SET publication='draft',verified_at=NULL,verified_by=NULL,status='unverified',price_visible=false,data=$3,version=version+1,updated_at=now() WHERE id=$1 AND version=$2 RETURNING id",
+                [p.id, p.version, json(revisedData)],
+              );
+              if (!result.rows.length)
+                throw new HttpError(409, "Conflicting geometry change");
+              await tx.query(
+                "UPDATE plot_geometry SET draft_id=$1,revision_id=$2 WHERE plot_id=$3",
+                [g.draft_id, d.revision_id, p.id],
+              );
+              await tx.query("DELETE FROM plot_dimensions WHERE plot_id=$1", [
+                p.id,
+              ]);
+              if (p.status !== "unverified")
+                await tx.query(
+                  "INSERT INTO inventory_status_history(id,plot_id,old_status,new_status,changed_by,reason) VALUES($1,$2,$3,$4,$5,$6)",
+                  [
+                    randomUUID(),
+                    p.id,
+                    p.status,
+                    "unverified",
+                    req.user.id,
+                    v.reason,
+                  ],
+                );
+              if (p.price_visible)
+                await tx.query(
+                  "INSERT INTO price_records(id,plot_id,amount,visible,changed_by,reason) VALUES($1,$2,$3,false,$4,$5)",
+                  [randomUUID(), p.id, p.price_inr, req.user.id, v.reason],
+                );
+              await audit(
+                tx,
+                req.user,
+                "geometry.reassign",
+                p.id,
+                {
+                  draftId: p.draft_id,
+                  revision: p.revision_id,
+                  status: p.status,
+                  priceVisible: p.price_visible,
+                  data: p.data,
+                },
+                {
+                  draftId: g.draft_id,
+                  revision: d.revision_id,
+                  status: "unverified",
+                  priceVisible: false,
+                  data: revisedData,
+                },
+                v.reason,
+              );
+            }
+            await tx.query(
+              "UPDATE geometry_proposals SET status=$1 WHERE id=$2",
+              [v.approve ? "approved" : "rejected", g.id],
+            );
+            return { ok: true };
+          },
+        ),
+      );
+    },
+  );
+  app.use("/api", (req, res) =>
+    res.status(404).json({ error: "API endpoint not found" }),
+  );
+  if (serveStatic) {
+    app.use(express.static(resolve("dist"), { index: false, maxAge: "1h" }));
+    app.get("/{*path}", async (req, res) => {
+      let html = await readFile(resolve("dist/index.html"), "utf8");
+      const escape = (v) =>
+        String(v).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+      html = html.replace(
+        'content="/assets/geographic-layout.png"',
+        `content="${escape(origin)}/assets/geographic-layout.png"`,
+      );
+      if (req.path.startsWith("/plots/")) {
+        const id = req.path.slice(7),
+          p = uuid.safeParse(id).success ? await getPlot(db, id) : null;
+        const title =
+          p?.publication === "published"
+            ? `Plot ${p.number} · ${p.block} · Shubh Mangal Residency`
+            : "Plot unavailable · Shubh Mangal Residency";
+        if (!p || p.publication !== "published") res.status(404);
+        html = html
+          .replace(/<title>[^<]*<\/title>/, `<title>${escape(title)}</title>`)
+          .replace(
+            /property="og:title"\s+content="[^"]*"/,
+            `property="og:title" content="${escape(title)}"`,
+          );
+      }
+      res.set("Cache-Control", "no-store").type("html").send(html);
+    });
+  }
+  app.use((err, req, res, _next) => {
+    const status =
+      err instanceof z.ZodError
+        ? 422
+        : err.status ||
+          (["23505", "23503", "23514"].includes(err.code) ? 409 : 500);
+    if (logging && status === 500)
+      console.error(json({ requestId: req.requestId, error: err.message }));
+    res.status(status).json({
+      error:
+        status === 500
+          ? "The server could not complete this request. Please retry."
+          : err instanceof z.ZodError
+            ? "Please correct the highlighted fields."
+            : status === 409 && !err.status
+              ? "A conflicting or invalid record exists. Reload and review it."
+              : err.message,
+      fields:
+        err instanceof z.ZodError
+          ? Object.fromEntries(
+              err.issues.map((x) => [x.path.join("."), x.message]),
+            )
+          : undefined,
+      requestId: req.requestId,
+    });
+  });
+  return app;
+}
