@@ -67,6 +67,7 @@ for (const [name, second] of [
       input([outer, second]),
     );
     assert.equal(result.cells.length, 2);
+    assert.deepEqual(result.cells[0].geographicGeometry, outer.geometry);
   });
 for (const [name, feature] of [
   [

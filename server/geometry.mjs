@@ -147,6 +147,7 @@ export function deriveCell(feature, id, layout = sourceLayout) {
   if (!inside(center, points)) center = points[0];
   return {
     id,
+    geographicGeometry: structuredClone(feature.geometry),
     label: feature.properties.label,
     block: feature.properties.block,
     path: `M${points.map((p) => p.join(",")).join(" L")} Z`,

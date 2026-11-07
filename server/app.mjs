@@ -45,6 +45,7 @@ import {
   OWNER_AMENITY_SOURCE,
 } from "../shared/owner-amenity-references.mjs";
 import { stageImage, mediaFile } from "./media.mjs";
+import { publicGeometry } from "./public-geometry.mjs";
 const uuid = z.uuid();
 const json = (v) => JSON.stringify(v);
 export function createApp(
@@ -391,13 +392,7 @@ export function createApp(
     res.json(publicPlot(p));
   });
   app.get("/api/public/geometry", async (req, res) => {
-    res.json({
-      mappings: (
-        await db.query(
-          "SELECT g.* FROM plot_geometry g JOIN plots p ON p.id=g.plot_id WHERE p.publication='published'",
-        )
-      ).rows,
-    });
+    res.json(await publicGeometry(db, sourceLayout));
   });
   for (const isVisit of [false, true])
     app.post(
