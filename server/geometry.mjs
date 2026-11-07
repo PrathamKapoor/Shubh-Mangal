@@ -1,4 +1,5 @@
 import proj4 from "proj4";
+import polygonClipping from "polygon-clipping";
 import { z } from "zod";
 import { hash, audit } from "./auth.mjs";
 import { HttpError } from "./inventory.mjs";
@@ -58,6 +59,26 @@ function crosses(a, b, c, d) {
     cross(c, d, a) * cross(c, d, b) < -1e-8
   );
 }
+const onSegment = (p, a, b) =>
+  Math.abs(cross(a, b, p)) <= 1e-9 &&
+  p[0] >= Math.min(a[0], b[0]) &&
+  p[0] <= Math.max(a[0], b[0]) &&
+  p[1] >= Math.min(a[1], b[1]) &&
+  p[1] <= Math.max(a[1], b[1]);
+function touches(a, b, c, d) {
+  return (
+    crosses(a, b, c, d) ||
+    onSegment(a, c, d) ||
+    onSegment(b, c, d) ||
+    onSegment(c, a, b) ||
+    onSegment(d, a, b)
+  );
+}
+// A micrometre grid stabilises floating point projection noise, not survey error.
+// Intersection area is then tested strictly positive in local square metres.
+function clippingRing(cell) {
+  return cell.edges.map(({ a }) => a.map((v) => Math.round(v * 1e6) / 1e6));
+}
 function inside(p, ring) {
   let yes = false;
   for (let i = 0, j = ring.length - 2; i < ring.length - 1; j = i++) {
@@ -79,7 +100,20 @@ export function deriveCell(feature, id) {
     const [x, y] = proj4("EPSG:4326", projection, p);
     return [x - origin.x, origin.y - y];
   });
+  if (
+    new Set(points.slice(0, -1).map((p) => p.join(","))).size !==
+    points.length - 1
+  )
+    throw new HttpError(422, "Repeated polygon vertices require correction");
   for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i],
+      b = points[i + 1],
+      c = points[(i + 2) % (points.length - 1)];
+    if (
+      Math.abs(cross(a, b, c)) <= 1e-9 &&
+      (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]) < 0
+    )
+      throw new HttpError(422, "Backtracking polygon edges require correction");
     if (
       Math.hypot(
         points[i][0] - points[i + 1][0],
@@ -89,7 +123,7 @@ export function deriveCell(feature, id) {
       throw new HttpError(422, "Remove zero-length or sub-5cm edges");
     for (let j = i + 2; j < points.length - 1; j++) {
       if (i === 0 && j === points.length - 2) continue;
-      if (crosses(points[i], points[i + 1], points[j], points[j + 1]))
+      if (touches(points[i], points[i + 1], points[j], points[j + 1]))
         throw new HttpError(422, "Self-crossing polygons require correction");
     }
   }
@@ -140,23 +174,23 @@ export async function stageGeometry(tx, user, input) {
   const revision = revisionSchema.parse(input),
     digest = hash(JSON.stringify(revision)),
     id = `revision-${digest}`;
-  const cells = revision.features.map((f, i) =>
-    deriveCell(f, `${id}-cell-${i + 1}`),
-  );
+  const cells = revision.features.map((f, i) => {
+    try {
+      return deriveCell(f, `${id}-cell-${i + 1}`);
+    } catch (error) {
+      if (error instanceof HttpError)
+        error.message = `Feature ${i + 1}: ${error.message}`;
+      throw error;
+    }
+  });
   // Overlaps must be reconciled deliberately; no automatic split/merge of existing inventory.
   for (let i = 0; i < cells.length; i++)
     for (let j = i + 1; j < cells.length; j++) {
       if (
-        cells[i].edges.some((a) =>
-          cells[j].edges.some((b) => crosses(a.a, a.b, b.a, b.b)),
-        ) ||
-        inside(
-          cells[i].center,
-          revision.features[j].geometry.coordinates[0].map((p) => {
-            const [x, y] = proj4("EPSG:4326", projection, p);
-            return [x - origin.x, origin.y - y];
-          }),
-        )
+        polygonClipping.intersection(
+          [clippingRing(cells[i])],
+          [clippingRing(cells[j])],
+        ).length > 0
       )
         throw new HttpError(
           422,
