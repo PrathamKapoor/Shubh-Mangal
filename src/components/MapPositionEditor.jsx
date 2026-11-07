@@ -1,5 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import proj4 from "proj4";
+import {
+  geographicToPlan,
+  planToGeographic,
+  projectionFromLayout,
+} from "../../shared/geography.mjs";
 import {
   amenityClipBridges,
   areaRing,
@@ -9,7 +13,13 @@ import {
 import AmenityArtwork from "./AmenityArtwork";
 import LeisureFacility from "./LeisureFacility";
 import { foregroundImage, foregroundReference } from "../services/amenities";
-const projection = "+proj=utm +zone=43 +datum=WGS84 +units=m +no_defs";
+function projectLocation(location, layout) {
+  try {
+    return geographicToPlan(location, layout);
+  } catch {
+    return null;
+  }
+}
 export default function MapPositionEditor({
   referenceId,
   location,
@@ -37,7 +47,10 @@ export default function MapPositionEditor({
         if (!r.ok) throw Error("Plan unavailable");
         return r.json();
       })
-      .then(setLayout)
+      .then((data) => {
+        projectionFromLayout(data);
+        setLayout(data);
+      })
       .catch((e) => {
         if (e.name !== "AbortError")
           setError(
@@ -50,17 +63,9 @@ export default function MapPositionEditor({
     if (!layout) return null;
     if (!reference) return layout.viewBox;
     if (!wholeArea) {
-      const valid =
-        Number.isFinite(focusLocation?.lat) &&
-        Number.isFinite(focusLocation?.lon);
-      const [east, north] = valid
-        ? proj4("EPSG:4326", projection, [focusLocation.lon, focusLocation.lat])
-        : [
-            layout.origin.easting + reference.mapPoint.x,
-            layout.origin.northingTop - reference.mapPoint.y,
-          ];
-      let x = east - layout.origin.easting;
-      let y = layout.origin.northingTop - north;
+      const focus =
+        projectLocation(focusLocation, layout) ?? reference.mapPoint;
+      let { x, y } = focus;
       const shared = ["owner-ref-temple", "owner-ref-garden"].includes(
         reference.id,
       );
@@ -95,12 +100,7 @@ export default function MapPositionEditor({
   }, [layout, reference, artworkReference, wholeArea, focusLocation]);
   if (!layout)
     return <p role={error ? "alert" : "status"}>{error || "Loading plan…"}</p>;
-  const project = (loc) => {
-    if (!Number.isFinite(loc?.lat) || !Number.isFinite(loc?.lon)) return null;
-    const [x, y] = proj4("EPSG:4326", projection, [loc.lon, loc.lat]);
-    return { x: x - layout.origin.easting, y: layout.origin.northingTop - y };
-  };
-  const point = project(location);
+  const point = projectLocation(location, layout);
   const defaultImage = reference && `/assets/concepts/${reference.image}`;
   const previewImage = useForeground
     ? foregroundImage(reference)
@@ -112,10 +112,13 @@ export default function MapPositionEditor({
       setError("Choose a point inside the highlighted owner-indicated area.");
       return;
     }
-    const [lon, lat] = proj4(projection, "EPSG:4326", [
-      layout.origin.easting + next.x,
-      layout.origin.northingTop - next.y,
-    ]);
+    let lat, lon;
+    try {
+      ({ lat, lon } = planToGeographic(next, layout));
+    } catch {
+      setError("Choose a point within the colony region.");
+      return;
+    }
     if (lat < 24.46 || lat > 24.48 || lon < 74.9 || lon > 74.92) {
       setError("Choose a point within the colony region.");
       return;

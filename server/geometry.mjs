@@ -1,4 +1,8 @@
-import proj4 from "proj4";
+import sourceLayout from "../public/data/layout.json" with { type: "json" };
+import {
+  geographicToPlan as projectToPlan,
+  planToGeographic as projectToGeographic,
+} from "../shared/geography.mjs";
 import polygonClipping from "polygon-clipping";
 import { z } from "zod";
 import { hash, audit } from "./auth.mjs";
@@ -38,17 +42,11 @@ export const revisionSchema = z
       .max(100),
   })
   .strict();
-const projection = "+proj=utm +zone=43 +datum=WGS84 +units=m +no_defs";
-const origin = { x: 490591.00915491674, y: 2706083.691156203 };
-export function geographicToPlan({ lat, lon }) {
-  const [x, y] = proj4("EPSG:4326", projection, [lon, lat]);
-  return { x: x - origin.x, y: origin.y - y };
+export function geographicToPlan(point, layout = sourceLayout) {
+  return projectToPlan(point, layout);
 }
-export function planToGeographic({ x, y }) {
-  const [lon, lat] = proj4(projection, "EPSG:4326", [
-    origin.x + x,
-    origin.y - y,
-  ]);
+export function planToGeographic(point, layout = sourceLayout) {
+  const { lat, lon } = projectToGeographic(point, layout);
   return { lat: Number(lat.toFixed(7)), lon: Number(lon.toFixed(7)) };
 }
 const cross = (a, b, c) =>
@@ -92,13 +90,13 @@ function inside(p, ring) {
   }
   return yes;
 }
-export function deriveCell(feature, id) {
+export function deriveCell(feature, id, layout = sourceLayout) {
   const ring = feature.geometry.coordinates[0];
   if (ring[0][0] !== ring.at(-1)[0] || ring[0][1] !== ring.at(-1)[1])
     throw new HttpError(422, "Close each polygon ring explicitly");
   const points = ring.map((p) => {
-    const [x, y] = proj4("EPSG:4326", projection, p);
-    return [x - origin.x, origin.y - y];
+    const { x, y } = projectToPlan({ lon: p[0], lat: p[1] }, layout);
+    return [x, y];
   });
   if (
     new Set(points.slice(0, -1).map((p) => p.join(","))).size !==
