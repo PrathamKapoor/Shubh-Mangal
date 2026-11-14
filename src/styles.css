@@ -2837,3 +2837,14 @@ td {
     margin: 0 auto 12px;
   }
 }
+.google-view-shell {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  background: #fffef9;
+  padding: 8px;
+  touch-action: pan-y;
+}
+.google-view-shell button {
+  min-height: 44px;
+}

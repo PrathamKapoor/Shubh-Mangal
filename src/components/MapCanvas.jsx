@@ -26,6 +26,7 @@ import AmenityArtwork from "./AmenityArtwork";
 import AmenityFigure from "./AmenityFigure";
 import LeisureFacility from "./LeisureFacility";
 const Colony3D = lazy(() => import("./Colony3D"));
+const GoogleMapView = lazy(() => import("./GoogleMapView"));
 class ThreeLoadBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -40,8 +41,10 @@ class ThreeLoadBoundary extends React.Component {
       <div className="three-fallback" role="alert">
         <p>
           {this.props.hindi
-            ? "3D लोड नहीं हो सका।"
-            : "The 3D view could not load."}
+            ? this.props.message
+              ? "गूगल दृश्य लोड नहीं हो सका। स्थानीय प्लान खोलें।"
+              : "3D लोड नहीं हो सका।"
+            : this.props.message || "The 3D view could not load."}
         </p>
         <button type="button" onClick={this.props.onExit}>
           {this.props.hindi ? "2D नक्शा" : "Back to 2D map"}
@@ -137,6 +140,7 @@ export default function MapCanvas({
   onAmenitySelect,
   onAmenityClose,
   language = "en",
+  stale = false,
 }) {
   const hi = language === "hi";
   const svg = useRef(),
@@ -776,7 +780,7 @@ export default function MapCanvas({
                   : "North up · map-derived drawing"}
           </small>
         </span>
-        {mapMode !== "original" && (
+        {mapMode !== "original" && mapMode !== "google" && (
           <div className="map-options">
             <label>
               <input
@@ -826,6 +830,12 @@ export default function MapCanvas({
           aria-label={hi ? "नक्शे का दृश्य" : "Map appearance"}
         >
           <button
+            aria-pressed={mapMode === "google"}
+            onClick={() => setMapMode("google")}
+          >
+            {hi ? "गूगल नक्शा" : "Google Maps"}
+          </button>
+          <button
             aria-pressed={mapMode === "colony"}
             onClick={() => setMapMode("colony")}
           >
@@ -851,17 +861,21 @@ export default function MapCanvas({
           </button>
         </div>
         <span>
-          {mapMode === "original"
+          {mapMode === "google"
             ? hi
-              ? "दस्तावेज़ अलग दिखाया गया है"
-              : "Source document shown separately"
-            : mapMode === "plan"
+              ? "भौगोलिक संदर्भ · स्रोत की पुष्टि आवश्यक"
+              : "Geographic context · source alignment unverified"
+            : mapMode === "original"
               ? hi
-                ? "प्लॉट पढ़ने की स्पष्ट योजना"
-                : "Clear plan for reading plots"
-              : hi
-                ? "सांकेतिक नक्शा · मापानुसार नहीं"
-                : "Illustrative layout · not to scale"}
+                ? "दस्तावेज़ अलग दिखाया गया है"
+                : "Source document shown separately"
+              : mapMode === "plan"
+                ? hi
+                  ? "प्लॉट पढ़ने की स्पष्ट योजना"
+                  : "Clear plan for reading plots"
+                : hi
+                  ? "सांकेतिक नक्शा · मापानुसार नहीं"
+                  : "Illustrative layout · not to scale"}
         </span>
       </div>
       <div className="map-area">
@@ -869,10 +883,19 @@ export default function MapCanvas({
           ref={svg}
           viewBox={view.join(" ")}
           role="img"
-          tabIndex={mapMode === "original" || mapMode === "3d" ? -1 : 0}
-          aria-hidden={mapMode === "original" || mapMode === "3d" || undefined}
+          tabIndex={
+            mapMode === "original" || mapMode === "3d" || mapMode === "google"
+              ? -1
+              : 0
+          }
+          aria-hidden={
+            mapMode === "original" ||
+            mapMode === "3d" ||
+            mapMode === "google" ||
+            undefined
+          }
           style={
-            mapMode === "original" || mapMode === "3d"
+            mapMode === "original" || mapMode === "3d" || mapMode === "google"
               ? { visibility: "hidden" }
               : undefined
           }
@@ -1947,7 +1970,34 @@ export default function MapCanvas({
             </g>
           ))}
         </svg>
-        {mapMode === "3d" ? (
+        {mapMode === "google" ? (
+          <div className="google-view-shell">
+            <ThreeLoadBoundary
+              hindi={hi}
+              message="Google view could not load. Return to the local Plan."
+              onExit={() => setMapMode("plan")}
+            >
+              <Suspense
+                fallback={
+                  <p role="status">
+                    {hi ? "नक्शा खुल रहा है…" : "Opening geographic view…"}
+                  </p>
+                }
+              >
+                <GoogleMapView
+                  data={data}
+                  plots={sourcePlots}
+                  selected={selected}
+                  visibleIds={visibleIds}
+                  onSelect={onSelect}
+                  hindi={hi}
+                  stale={stale}
+                  onExit={() => setMapMode("plan")}
+                />
+              </Suspense>
+            </ThreeLoadBoundary>
+          </div>
+        ) : mapMode === "3d" ? (
           <div className="three-view-shell">
             <ThreeLoadBoundary hindi={hi} onExit={() => setMapMode("colony")}>
               <Suspense

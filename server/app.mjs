@@ -56,11 +56,17 @@ export function createApp(
     production = process.env.NODE_ENV === "production",
     serveStatic = false,
     logging = true,
+    googleMaps = process.env.GOOGLE_MAPS_ENABLED === "true",
     mediaDirectory = process.env.MEDIA_DIRECTORY || ".local/media",
   } = {},
 ) {
   const app = express();
   app.disable("x-powered-by");
+  app.use((req, res, next) => {
+    if (googleMaps) res.locals.cspNonce = randomBytes(18).toString("base64");
+    res.set("Permissions-Policy", "geolocation=(self)");
+    next();
+  });
   if (process.env.TRUST_PROXY_HOPS)
     app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS));
   app.use(
@@ -68,10 +74,52 @@ export function createApp(
       contentSecurityPolicy: {
         directives: {
           defaultSrc: ["'self'"],
-          scriptSrc: ["'self'"],
-          styleSrc: ["'self'", "'unsafe-inline'"],
-          imgSrc: ["'self'", "data:", "blob:"],
-          connectSrc: ["'self'"],
+          scriptSrc: googleMaps
+            ? [
+                "'self'",
+                (_req, res) => `'nonce-${res.locals.cspNonce}'`,
+                "'strict-dynamic'",
+                "'unsafe-eval'",
+                "blob:",
+              ]
+            : ["'self'"],
+          styleSrc: [
+            "'self'",
+            "'unsafe-inline'",
+            ...(googleMaps ? ["https://fonts.googleapis.com"] : []),
+          ],
+          imgSrc: [
+            "'self'",
+            "data:",
+            "blob:",
+            ...(googleMaps
+              ? [
+                  "https://*.googleapis.com",
+                  "https://*.gstatic.com",
+                  "https://*.google.com",
+                  "https://*.googleusercontent.com",
+                ]
+              : []),
+          ],
+          connectSrc: [
+            "'self'",
+            ...(googleMaps
+              ? [
+                  "https://*.googleapis.com",
+                  "https://*.gstatic.com",
+                  "https://*.google.com",
+                  "data:",
+                  "blob:",
+                ]
+              : []),
+          ],
+          ...(googleMaps
+            ? {
+                fontSrc: ["'self'", "https://fonts.gstatic.com"],
+                frameSrc: ["https://*.google.com"],
+                workerSrc: ["'self'", "blob:"],
+              }
+            : {}),
           objectSrc: ["'none'"],
           frameAncestors: ["'none'"],
           upgradeInsecureRequests: production ? [] : null,
@@ -1725,6 +1773,11 @@ export function createApp(
     app.use(express.static(resolve("dist"), { index: false, maxAge: "1h" }));
     app.get("/{*path}", async (req, res) => {
       let html = await readFile(resolve("dist/index.html"), "utf8");
+      if (googleMaps)
+        html = html.replace(
+          /<script\b/g,
+          `<script nonce="${res.locals.cspNonce}"`,
+        );
       const escape = (v) =>
         String(v).replace(
           /[&<>"']/g,

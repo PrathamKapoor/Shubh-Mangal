@@ -1214,6 +1214,7 @@ function App() {
                           onAmenitySelect={chooseAmenity}
                           onAmenityClose={() => navigate("/explore")}
                           language={language}
+                          stale={stale}
                         />
                       </div>
                     </Suspense>

@@ -34,7 +34,11 @@ export default defineConfig({
     {
       command: "npm run dev -- --port 5181 --strictPort",
       url: "http://127.0.0.1:5181",
-      env: { API_PROXY_TARGET: "http://127.0.0.1:3002" },
+      env: {
+        API_PROXY_TARGET: "http://127.0.0.1:3002",
+        VITE_GOOGLE_MAPS_ENABLED: process.env.VITE_GOOGLE_MAPS_ENABLED || "false",
+        VITE_GOOGLE_MAPS_KEY: process.env.VITE_GOOGLE_MAPS_KEY || "",
+      },
       reuseExistingServer: false,
     },
   ],
