@@ -1567,6 +1567,15 @@ function App() {
                 those providers when you choose to open them.
               </p>
               <p>
+                Opening the optional Google map contacts Google for its basemap.
+                My location asks for browser permission only when pressed. The
+                reported point and accuracy stay in this view's memory, are
+                cleared when hidden or closed, and are not added to enquiries,
+                application requests, URLs, logs or browser storage. Map viewport
+                requests to Google are subject to that provider's privacy terms.
+                This feature does not identify the parcel you are standing on.
+              </p>
+              <p>
                 The owner must set a retention period, privacy contact and
                 customer deletion procedure before public launch. Permanent
                 inventory audit history contains business changes; buyer contact

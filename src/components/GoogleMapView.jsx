@@ -5,6 +5,10 @@ import {
   loadGoogleMaps,
   siteBounds,
 } from "../services/google-maps.js";
+import {
+  createLocationRequest,
+  locationRelativeToBounds,
+} from "../services/visitor-location.js";
 
 const colors = {
   available: "#23734b",
@@ -112,6 +116,74 @@ export default function GoogleMapView({
   const [collection, setCollection] = useState(null),
     [geometryError, setGeometryError] = useState(false),
     [mapType, setMapType] = useState("roadmap");
+  const locationRequest = useRef(null);
+  const [device, setDevice] = useState({ status: "idle" });
+
+  useEffect(() => {
+    if (!ready) return;
+    const request = createLocationRequest({
+      geolocation: navigator.geolocation,
+      secureContext: window.isSecureContext,
+      onChange: (state) => {
+        setDevice(state);
+        if (state.position)
+          mapRef.current?.panTo({
+            lat: state.position.lat,
+            lng: state.position.lng,
+          });
+      },
+    });
+    locationRequest.current = request;
+    const hide = () => {
+      if (document.hidden) {
+        request.cancel();
+        setDevice({ status: "idle" });
+      }
+    };
+    document.addEventListener("visibilitychange", hide);
+    return () => {
+      request.cancel();
+      locationRequest.current = null;
+      document.removeEventListener("visibilitychange", hide);
+    };
+  }, [ready]);
+  useEffect(() => {
+    if (!ready || !device.position) return;
+    const { lat, lng, accuracy, timestamp } = device.position;
+    const maps = window.google.maps,
+      center = { lat, lng };
+    const uncertainty = new maps.Circle({
+      map: mapRef.current,
+      center,
+      radius: accuracy,
+      clickable: false,
+      fillColor: "#2463a0",
+      fillOpacity: 0.12,
+      strokeColor: "#2463a0",
+      strokeOpacity: 0.6,
+      strokeWeight: 1,
+    });
+    const marker = new maps.Circle({
+      map: mapRef.current,
+      center,
+      radius: 3,
+      clickable: false,
+      fillColor: "#2463a0",
+      fillOpacity: 1,
+      strokeColor: "#ffffff",
+      strokeWeight: 2,
+      zIndex: 10,
+    });
+    const timer = setTimeout(
+      () => setDevice({ status: "stale" }),
+      Math.max(0, 60000 - (Date.now() - timestamp)),
+    );
+    return () => {
+      clearTimeout(timer);
+      uncertainty.setMap(null);
+      marker.setMap(null);
+    };
+  }, [ready, device]);
 
   useEffect(() => {
     if (!enabled || boundsKey === "null") return;
@@ -335,6 +407,58 @@ export default function GoogleMapView({
           {text.hybrid}
         </button>
       </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: 8 }}>
+        <button
+          type="button"
+          style={buttonStyle}
+          disabled={!ready || Boolean(error) || device.status === "requesting"}
+          onClick={() => locationRequest.current?.request()}
+        >
+          {hindi ? "मेरा स्थान" : "My location"}
+        </button>
+        <button
+          type="button"
+          style={buttonStyle}
+          disabled={device.status === "idle"}
+          onClick={() => {
+            locationRequest.current?.cancel();
+            setDevice({ status: "idle" });
+          }}
+        >
+          {hindi ? "स्थान हटाएँ" : "Clear location"}
+        </button>
+      </div>
+      <p role="status" aria-live="polite" data-testid="location-status">
+        {device.position
+          ? `${hindi ? "ब्राउज़र की अनुमानित सटीकता" : "Browser-reported accuracy"}: ${Math.ceil(device.position.accuracy)} m. ${locationRelativeToBounds(device.position, siteBounds(data)) === "off-site" ? (hindi ? "रिपोर्ट किया गया बिंदु स्थल सीमा के बाहर है।" : "The reported point is outside the site extent.") : hindi ? "यह किसी प्लॉट पर उपस्थिति का प्रमाण नहीं है।" : "This does not establish presence on a parcel."}`
+          : device.status === "idle"
+            ? hindi
+              ? "स्थान केवल बटन दबाने पर माँगा जाएगा।"
+              : "Location is requested only when you press My location."
+            : hindi
+              ? {
+                  requesting: "स्थान माँगा जा रहा है…",
+                  denied: "स्थान की अनुमति नहीं मिली। ब्राउज़र सेटिंग जाँचें।",
+                  timeout: "स्थान अनुरोध का समय समाप्त हुआ। फिर प्रयास करें।",
+                  unavailable: "स्थान उपलब्ध नहीं है।",
+                  unsupported: "ब्राउज़र स्थान सुविधा उपलब्ध नहीं है।",
+                  insecure: "स्थान के लिए HTTPS आवश्यक है।",
+                  stale: "स्थान पुराना है। नया स्थान माँगें।",
+                  invalid: "स्थान की जानकारी अमान्य है।",
+                }[device.status] || "स्थान उपलब्ध नहीं है।"
+              : device.status === "requesting"
+                ? "Requesting your location…"
+                : device.error || "Location is stale. Request a new position."}
+        {device.status === "inaccurate" &&
+          (hindi
+            ? " सटीकता कम है; प्लॉट की पहचान नहीं की जा सकती।"
+            : " Low accuracy; this cannot identify a parcel.")}
+      </p>
+      <p>
+        {hindi
+          ? "गूगल दृश्य खोलने पर मानचित्र प्रदाता से संपर्क होता है। आपका स्थान इस सुविधा की मेमोरी में रहता है; इसे फ़ॉर्म या संग्रह में नहीं जोड़ा जाता। पृष्ठ छिपने या दृश्य बंद होने पर स्थान हटा दिया जाता है।"
+          : "Opening this basemap contacts Google. This feature keeps your location in memory and does not attach it to forms or storage. Location is cleared when the page is hidden or this view closes."}
+      </p>
       {error && (
         <div role="alert">
           <p>{error === "reload" ? text.auth : text[error] || text.network}</p>

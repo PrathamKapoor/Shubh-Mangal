@@ -31,7 +31,11 @@ const official = {
 // This adapter replaces only Google's network boundary. The actual component,
 // React lifecycle, matching, fetch, filtering and event handlers run unchanged.
 const adapter = `(() => {
-  const state = window.mapAdapter = {fits:0, features:[], type:'roadmap'};
+  const state = window.mapAdapter = {fits:0, pans:0, circles:[], features:[], type:'roadmap'};
+  class Circle {
+    constructor(options){this.options=options;this.attached=!!options.map;state.circles.push(this);}
+    setMap(map){this.attached=!!map;}
+  }
   class Data {
     constructor(){this.features=[];state.layer=this;}
     setMap(map){state.attached=!!map;}
@@ -45,8 +49,9 @@ const adapter = `(() => {
     constructor(element,options){state.type=options.mapTypeId;element.textContent='Native map fixture';}
     fitBounds(bounds){state.fits++;state.bounds=bounds;}
     setMapTypeId(type){state.type=type;}
+    panTo(point){state.pans++;state.position=point;}
   }
-  window.google={maps:{Map,Data,event:{clearInstanceListeners(){}}}};
+  window.google={maps:{Map,Data,Circle,event:{clearInstanceListeners(){}}}};
   window[new URL(document.currentScript.src).searchParams.get('callback')]();
 })();`;
 
@@ -148,6 +153,72 @@ test("native map matches features, styles filters, selects IDs and fits only exp
   expect(await page.evaluate(() => window.mapAdapter.attached)).toBe(false);
   expect(await page.evaluate(() => window.gm_authFailure)).toBeUndefined();
 });
+
+test("visitor location is intentional, shows metre uncertainty and never enters app requests or storage", async ({
+  page,
+  context,
+}) => {
+  test.skip(!providerEnabled, "Controlled provider adapter");
+  await context.grantPermissions(["geolocation"]);
+  await context.setGeolocation({
+    latitude: 19.1234567,
+    longitude: 72.7654321,
+    accuracy: 750,
+  });
+  const appRequests = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).pathname.startsWith("/api/"))
+      appRequests.push(r.url() + (r.postData() || ""));
+  });
+  await mount(page);
+  await expect(
+    page.getByRole("button", { name: "My location", exact: true }),
+  ).toBeEnabled();
+  expect(await page.evaluate(() => window.mapAdapter.pans)).toBe(0);
+  await page.getByRole("button", { name: "My location", exact: true }).click();
+  await expect(page.getByTestId("location-status")).toContainText("750 m");
+  await expect(page.getByTestId("location-status")).toContainText("outside");
+  expect(
+    await page.evaluate(() =>
+      window.mapAdapter.circles
+        .filter((c) => c.attached)
+        .map((c) => c.options.radius),
+    ),
+  ).toContain(750);
+  expect(await page.evaluate(() => window.mapAdapter.pans)).toBe(1);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect
+    .poll(() => page.evaluate(() => window.mapAdapter.features.length))
+    .toBe(2);
+  expect(await page.evaluate(() => window.mapAdapter.pans)).toBe(1);
+  await page.getByRole("button", { name: "Show entire site" }).click();
+  expect(await page.evaluate(() => window.mapAdapter.fits)).toBe(2);
+  expect(appRequests.join(" ")).not.toMatch(/19\.1234567|72\.7654321|750/);
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify({ ...localStorage, ...sessionStorage }),
+    ),
+  ).not.toMatch(/19\.1234567|72\.7654321/);
+  await page
+    .getByRole("button", { name: "Clear location", exact: true })
+    .click();
+  expect(
+    await page.evaluate(
+      () => window.mapAdapter.circles.filter((c) => c.attached).length,
+    ),
+  ).toBe(0);
+});
+
+for (const [code, message] of [[1,"permission was denied"],[2,"unavailable"],[3,"timed out"]])
+  test(`visitor location error ${code} has a readable state and no marker`, async ({page}) => {
+    test.skip(!providerEnabled,"Controlled provider adapter");
+    await page.addInitScript(code => Object.defineProperty(navigator,"geolocation",{value:{getCurrentPosition(_success,failure){failure({code,message:"private diagnostic"});}}}),code);
+    await mount(page);
+    await page.getByRole("button",{name:"My location",exact:true}).click();
+    await expect(page.getByTestId("location-status")).toContainText(message);
+    expect(await page.evaluate(()=>window.mapAdapter.circles.length)).toBe(0);
+    expect(await page.evaluate(()=>window.mapAdapter.pans)).toBe(0);
+  });
 test("refresh failure clears every overlay; focus recovers; mismatched official never becomes draft", async ({
   page,
 }) => {

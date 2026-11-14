@@ -1,5 +1,7 @@
 # Optional Google basemap
 
+**My location** makes one browser request after permission. It shows a centre indicator and reported accuracy circle in metres; off-site fixes remain valid. **Clear location** removes it. There is no follow mode or background watch. Hidden pages cancel pending callbacks and clear the point. A fix expires after 60 seconds (up to 5 seconds future clock allowance); reported accuracy over 100 m displays a low-accuracy warning, not an engineering/survey tolerance. No parcel-level presence is inferred. Secure context/HTTPS is required (localhost is a browser development exception).
+
 Open `/explore` → **Google Maps**. The local Plan, Illustrated, 3D and Original views remain available. Select a plot from the common list or a visible geographic boundary; selection, filters, compare and URL history continue to use the existing record. **Show entire site** is separate from visitor location. Roadmap/Hybrid use Google's own basemap and attribution. Field alignment is unverified.
 
 Default: disabled, no Google script request. Set `VITE_GOOGLE_MAPS_ENABLED=true` and `VITE_GOOGLE_MAPS_KEY=` to an operator-owned, browser-visible restricted Maps JavaScript API key, then rebuild. Set `GOOGLE_MAPS_ENABLED=true` on the production Express process to enable its provider CSP. A map ID is not required for the native Map/Data integration. Server-only credentials must never use VITE_ prefixes.
