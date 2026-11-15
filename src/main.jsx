@@ -88,6 +88,7 @@ function App() {
     [content, setContent] = useState([]),
     [siteConfig, setSiteConfig] = useState(() => createSiteConfig()),
     [siteExtent, setSiteExtent] = useState(null),
+    [siteAccessStatus, setSiteAccessStatus] = useState("unavailable"),
     [stale, setStale] = useState(false),
     [publicReady, setPublicReady] = useState(false);
   const [language, setLanguage] = useState(() =>
@@ -269,6 +270,7 @@ function App() {
           setMode(project.mode);
           setContent(project.items);
           setSiteExtent(project.geographicBounds || null);
+          setSiteAccessStatus(project.siteAccessStatus || "unavailable");
           setInventory(result);
           setStale(false);
           hasPublicData.current = true;
@@ -1209,6 +1211,11 @@ function App() {
                         className="map-wrap"
                         onPointerDown={() => setPlaying(false)}
                       >
+                        {siteAccessStatus === "needs_review" && (
+                          <p role="status" className="note">
+                            {hindi ? "प्रवेश स्थल की सीमा की दोबारा समीक्षा आवश्यक है; प्रवेश दिशा अस्थायी रूप से उपलब्ध नहीं है।" : "The entrance footprint needs another review against current parcel information. Gate directions are temporarily unavailable."}
+                          </p>
+                        )}
                         <MapCanvas
                           data={data}
                           plots={plots}
@@ -1356,7 +1363,9 @@ function App() {
                     : "The visitor entrance and approach route have not yet been confirmed."}
                 </p>
                 <div className="note">
-                  {visitorAccess
+                  {siteAccessStatus === "needs_review"
+                    ? "The entrance footprint needs another review against current parcel information. Gate directions are temporarily unavailable."
+                    : visitorAccess
                     ? "Directions use the reviewed visitor route-access point."
                     : "Gate directions are unavailable until visitor access is reviewed and published. The site-area link is approximate; confirm access with the team before travelling."}
                 </div>

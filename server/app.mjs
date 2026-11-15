@@ -316,6 +316,18 @@ export function createApp(
         "SELECT id,kind,published FROM content WHERE published IS NOT NULL",
       )
     ).rows;
+    const access = reviewedVisitorAccess(items);
+    let siteAccessStatus = access ? "available" : "unavailable";
+    if (access?.footprint) {
+      try {
+        await assessAccessFootprint(access.footprint, db, selectedLayout);
+      } catch {
+        // Hide both gate and directions when the current parcel snapshot
+        // cannot validate a previously published footprint. Keep the record
+        // and its audit history intact for staff review.
+        siteAccessStatus = "needs_review";
+      }
+    }
     const publicMappings = items.some((item) => item.kind === "presentation")
       ? new Map(
           (
@@ -328,6 +340,7 @@ export function createApp(
     res.json({
       mode: demo ? "local-demo" : "connected",
       geographicBounds: selectedLayout.geographicBounds,
+      siteAccessStatus,
       siteConfig: publicSiteConfig,
       items: items
         .filter(
@@ -335,7 +348,7 @@ export function createApp(
             (item.kind !== "amenity" ||
               item.published.customerVisible !== false) &&
             (item.kind !== "site_access" ||
-              Boolean(reviewedVisitorAccess([item]))),
+              (siteAccessStatus === "available" && Boolean(reviewedVisitorAccess([item])))),
         )
         .map((item) =>
           item.kind === "site_access"

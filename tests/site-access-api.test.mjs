@@ -521,6 +521,15 @@ test("synthetic footprint is staged privately and only a saved draft can be publ
   const publicFootprint = (await project()).items[0].published.footprint;
   assert.deepEqual(publicFootprint, { outer: footprint.outer, holes: footprint.holes });
   assert.ok(!JSON.stringify(publicFootprint).includes("Synthetic survey fixture"));
+  await db.query("UPDATE plots SET publication='published' WHERE id=$1", [collisionId]);
+  const staleProject = await project();
+  assert.equal(staleProject.siteAccessStatus, "needs_review");
+  assert.equal(staleProject.items.some((item) => item.id === id), false);
+  assert.deepEqual((await record()).published.footprint, footprint);
+  await db.query("UPDATE plots SET publication='draft' WHERE id=$1", [collisionId]);
+  const restoredProject = await project();
+  assert.equal(restoredProject.siteAccessStatus, "available");
+  assert.equal(restoredProject.items.some((item) => item.id === id), true);
   const entries = await auditRows();
   assert.ok(
     entries.some(
