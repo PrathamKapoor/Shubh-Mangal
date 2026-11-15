@@ -1,6 +1,8 @@
 import { test, expect } from "@playwright/test";
+import { geographicToPlan, planToGeographic } from "../../shared/geography.mjs";
+import layout from "../../public/data/layout.json" with { type: "json" };
 
-test("owner can enter a synthetic reviewed structure draft", async ({ page }) => {
+test("owner can enter a synthetic reviewed structure draft", async ({ page }, testInfo) => {
   await page.goto("/admin");
   await page.getByLabel("Email", { exact: true }).fill("owner@example.invalid");
   await page.getByLabel("Password", { exact: true }).fill("Synthetic-test-only-927156!");
@@ -15,13 +17,27 @@ test("owner can enter a synthetic reviewed structure draft", async ({ page }) =>
   await expect(editor.getByLabel("Measured height (m, optional)")).toBeVisible();
   await editor.getByLabel("Content ID").fill("synthetic-building");
   await editor.getByLabel("Name (English)").fill("Synthetic building");
-  await editor.getByLabel("Footprint WGS84 coordinates").fill(JSON.stringify({ outer: [[74.909,24.467],[74.90915,24.467],[74.90915,24.46704],[74.90908,24.46704],[74.90908,24.4671],[74.909,24.4671],[74.909,24.467]], holes: [] }));
+  const anchor = geographicToPlan({lon:74.909,lat:24.467},layout);
+  const outer = [[0,0],[8,0],[8,-5],[5,-5],[5,-8],[0,-8],[0,0]].map(([dx,dy]) => {
+    const p = planToGeographic({x:anchor.x+dx,y:anchor.y+dy},layout);
+    return [p.lon,p.lat];
+  });
+  await editor.getByLabel("Footprint WGS84 coordinates").fill(JSON.stringify({outer, holes: []}));
   await editor.getByRole("button", { name: "Apply footprint coordinates" }).click();
   await editor.getByLabel("Footprint source", { exact: true }).fill("Synthetic fixture evidence");
   await editor.getByLabel("Footprint source revision").fill("fixture-1");
   await editor.getByLabel("Physical anchor latitude").fill("24.467");
   await editor.getByLabel("Physical anchor longitude").fill("74.909");
-  await editor.getByLabel("Bearing clockwise from north (degrees)").fill("30");
+  await editor.getByLabel("Bearing clockwise from north (degrees)").fill("0");
+  await editor.getByLabel("Procedural model").selectOption("synthetic-building");
+  await editor.getByLabel("Model rights and source").fill("Synthetic procedural fixture");
+  await editor.getByLabel("Model correspondence evidence").fill("Synthetic measured outline");
+  await editor.getByLabel("Model width (m)").fill("8");
+  await editor.getByLabel("Model depth (m)").fill("8");
+  await editor.getByLabel("Model cutout width (m)").fill("3");
+  await editor.getByLabel("Model cutout depth (m)").fill("3");
+  await editor.getByLabel("Model dimensions source", {exact:true}).fill("Synthetic dimensions");
+  await editor.getByLabel("Model dimensions source revision").fill("dimensions-1");
   await editor.getByLabel("Measured height (m, optional)").fill("4");
   await editor.getByLabel("Height source", { exact: true }).fill("Synthetic height evidence");
   await editor.getByLabel("Height source revision").fill("height-1");
@@ -44,6 +60,8 @@ test("owner can enter a synthetic reviewed structure draft", async ({ page }) =>
     return project.items.find((item) => item.id === "synthetic-building")?.published.height?.metres;
   };
   await expect.poll(publicHeight).toBe(4);
+  const project = await (await page.request.get("/api/public/project")).json();
+  expect(project.items.find((item) => item.id === "synthetic-building").published.model).toEqual({assetId:"synthetic-building", revision:"v1", dimensions:{width:8,depth:8,cutoutWidth:3,cutoutDepth:3}});
   await page.reload();
   await page.getByRole("button", { name: "Content", exact: true }).click();
   const revision = page.locator("details.admin-card").filter({ hasText: "synthetic-building" });
@@ -68,9 +86,14 @@ test("owner can enter a synthetic reviewed structure draft", async ({ page }) =>
   await page.getByRole("button", { name: "2D plan (Source drawing)" }).click();
   await expect(page.locator('[data-structure-id="synthetic-building"]')).toBeVisible();
   await page.getByRole("button", { name: "Synthetic building", exact: true }).click();
+  await expect(page.getByText("Synthetic model is illustrative.", {exact:false})).toBeVisible();
   await page.getByRole("button", { name: "3D colony" }).click();
   await expect(page.getByRole("button", { name: "Synthetic building", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".colony-three-view canvas")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Focus selected" })).toBeEnabled();
+  await page.getByRole("button", { name: "Focus selected" }).click();
+  await page.getByRole("button", { name: "Tilt view" }).click();
+  await page.locator(".colony-three-view canvas").screenshot({path:testInfo.outputPath("synthetic-building.png")});
   await page.goto("/admin");
   await page.getByRole("button", { name: "Content", exact: true }).click();
   await revision.locator(":scope > summary").click();

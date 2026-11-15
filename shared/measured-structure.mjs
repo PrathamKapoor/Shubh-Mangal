@@ -47,7 +47,14 @@ export function preparePublicStructure(record, layout) {
         geographicToPlan({ lon, lat }, layout, { enforceBounds: true });
     const footprint = createFootprint3D({ footprint: structure.footprint }, layout);
     if (!footprint) return null;
+    const anchor = geographicToPlan(structure.frame.physicalAnchor, layout, { enforceBounds: true });
+    const model = structure.model ? measuredStructureGeometry({
+      anchor: [anchor.x, anchor.y], bearingDegrees: structure.frame.headingDegrees,
+      pivot: [structure.frame.pivot[0], structure.frame.pivot[2]],
+      dimensions: structure.model.dimensions, height: structure.height?.metres ?? null,
+    }) : null;
     return {
+      model,
       rings: footprint.rings.map((ring) => ring.map(([x, , z]) => [x, z])),
       height: structure.height === null ? null : structure.height.metres,
     };
@@ -69,4 +76,17 @@ export function createStructureMeshGeometry({ rings, height }) {
   return height === null
     ? new THREE.ShapeGeometry(shape)
     : new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
+}
+
+// An asymmetric front marker is part of the synthetic building fixture.
+// Coordinates are already world east/up/south; caller owns the geometry.
+export function createModelFrontGeometry(model) {
+  if (!model || model.height === null) return null;
+  const [a,b] = model.footprint;
+  const point = (fraction, up) => [a[0] + (b[0]-a[0])*fraction, model.height*up, a[1]+(b[1]-a[1])*fraction];
+  const vertices = [point(.125,.2),point(.375,.2),point(.375,.8),point(.125,.2),point(.375,.8),point(.125,.8)].flat();
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices,3));
+  geometry.computeVertexNormals();
+  return geometry;
 }

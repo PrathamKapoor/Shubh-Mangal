@@ -70,6 +70,7 @@ export const structureSchema = z
         revision: text.min(1),
         rights: text.min(1),
         correspondence: text.min(1),
+        dimensions: z.object({ width: z.number().positive().finite(), depth: z.number().positive().finite(), cutoutWidth: z.number().positive().finite(), cutoutDepth: z.number().positive().finite(), ...evidence }).strict().optional(),
       })
       .strict()
       .nullable(),
@@ -78,11 +79,11 @@ export const structureSchema = z
   })
   .strict();
 
-// Public records omit review evidence. Model delivery is not yet supported.
+// Public records omit review evidence and allow only the built-in procedural fixture.
 export const publicStructureSchema = z.object({
   title: text.min(1),
   footprint: z.object({ outer: ring, holes: z.array(ring).max(8) }).strict(),
   frame: structureSchema.shape.frame,
   height: z.object({ metres: z.number().positive().finite() }).strict().nullable(),
-  model: z.null(),
+  model: z.object({ assetId: z.literal("synthetic-building"), revision: z.literal("v1"), dimensions: z.object({ width: z.number().positive().finite(), depth: z.number().positive().finite(), cutoutWidth: z.number().positive().finite(), cutoutDepth: z.number().positive().finite() }).strict() }).strict().nullable(),
 }).strict();

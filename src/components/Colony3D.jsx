@@ -14,6 +14,7 @@ import {
   toWorld,
 } from "../../shared/scene3d.mjs";
 import { approvedBlocks } from "../../shared/domain.mjs";
+import { geographicToPlan } from "../../shared/geography.mjs";
 
 // 3D is a visualisation of the same presentation records, not a source of
 // dimensions. Shape geometry comes only from each supplied/published SVG path.
@@ -747,6 +748,7 @@ export default function Colony3D({
   visitorAccess,
   onAccessSelect,
   structures = [],
+  selectedStructure,
 }) {
   const [available, setAvailable] = useState(webGLAvailable);
   const [touchMode, setTouchMode] = useState(false);
@@ -789,7 +791,15 @@ export default function Colony3D({
   const complexY = complex.length
     ? complex.reduce((sum, item) => sum + item.mapPoint.y, 0) / complex.length
     : 0;
-  const focusTarget =
+  const structureTarget = useMemo(() => {
+    const record = structures.find((item) => item.id === selectedStructure);
+    if (!record?.published?.frame?.physicalAnchor) return null;
+    try {
+      const point = geographicToPlan(record.published.frame.physicalAnchor, data, { enforceBounds: true });
+      return { x: point.x, y: point.y, distance: 40 };
+    } catch { return null; }
+  }, [structures, selectedStructure, data]);
+  const focusTarget = structureTarget || (
     Number.isFinite(selectedFacility?.mapPoint?.x) &&
     Number.isFinite(selectedFacility?.mapPoint?.y)
       ? selectedFacility.id === "owner-ref-clubhouse"
@@ -822,7 +832,7 @@ export default function Colony3D({
                 (block.bounds[3] - block.bounds[1]) * 3,
               ),
             }
-          : null;
+          : null);
   const fallback = (
     <div role="status" className="three-fallback">
       <p>
@@ -961,7 +971,7 @@ export default function Colony3D({
             <FocusTarget
               api={controls}
               target={focusTarget}
-              targetKey={`${selectedAmenity || selected || selectedBlock || ""}:${focusRequest || 0}`}
+              targetKey={`${selectedStructure || selectedAmenity || selected || selectedBlock || ""}:${focusRequest || 0}`}
             />
           </Canvas>
         </SceneError>

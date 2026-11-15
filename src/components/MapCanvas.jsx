@@ -166,6 +166,7 @@ export default function MapCanvas({
     [accessSelected, setAccessSelected] = useState(false),
     [selectedStructure, setSelectedStructure] = useState(null),
     [planImageStatus, setPlanImageStatus] = useState("loading");
+  useEffect(() => { setSelectedStructure(null); }, [selected, activeAmenity, selectedBlock]);
   const accessPath = useMemo(() => {
     const footprint = visitorAccess?.footprint;
     if (!footprint) return null;
@@ -187,7 +188,7 @@ export default function MapCanvas({
         const point = geographicToPlan({ lat, lon }, data);
         return `${index ? "L" : "M"}${point.x} ${point.y}`;
       }).join(" ") + " Z").join(" ");
-      return [{ id: item.id, title: item.published.title, height: item.published.height?.metres ?? null, path }];
+      return [{ id: item.id, title: item.published.title, height: item.published.height?.metres ?? null, model: item.published.model, path }];
     } catch {
       return [];
     }
@@ -920,7 +921,7 @@ export default function MapCanvas({
       {structurePaths.length > 0 && ["plan", "google", "3d"].includes(mapMode) && (
         <div aria-label={hi ? "प्रकाशित संरचनाएँ" : "Published structures"}>
           {structurePaths.map((item) => <button type="button" key={item.id} onClick={() => setSelectedStructure(item.id)} aria-pressed={selectedStructure === item.id}>{item.title}</button>)}
-          {selectedStructure && structurePaths.filter((item) => item.id === selectedStructure).map((item) => <p key={item.id}>{hi ? "प्रकाशित संरचना की सीमा।" : "Published structure footprint."} {item.height === null ? (hi ? "ऊँचाई अज्ञात है।" : "Height is unknown.") : (hi ? `समीक्षित ऊँचाई: ${item.height} मीटर।` : `Reviewed height: ${item.height} m.`)}</p>)}
+          {selectedStructure && structurePaths.filter((item) => item.id === selectedStructure).map((item) => <p key={item.id}>{hi ? "प्रकाशित संरचना की सीमा।" : "Published structure footprint."} {item.model && (hi ? "सिंथेटिक मॉडल केवल चित्रण है।" : "Synthetic model is illustrative.")} {item.height === null ? (hi ? "ऊँचाई अज्ञात है।" : "Height is unknown.") : (hi ? `समीक्षित ऊँचाई: ${item.height} मीटर।` : `Reviewed height: ${item.height} m.`)}</p>)}
         </div>
       )}
       <div className="map-area">
@@ -2080,6 +2081,7 @@ export default function MapCanvas({
                   visitorAccess={visitorAccess}
                   onAccessSelect={() => setAccessSelected(true)}
                   structures={structures}
+                  selectedStructure={selectedStructure}
                   onExit={() => setMapMode("colony")}
                   hindi={hi}
                 />

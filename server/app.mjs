@@ -32,6 +32,7 @@ import {
 } from "./inventory.mjs";
 import { contentSchemas } from "./content.mjs";
 import { publicStructureSchema } from "../shared/structure.mjs";
+import { measuredStructureGeometry } from "../shared/measured-structure.mjs";
 import { presentationPlacementValid } from "../shared/presentation.mjs";
 import {
   stageGeometry,
@@ -120,6 +121,33 @@ async function assessAccessFootprint(footprint, db, sourceLayout) {
     throw new HttpError(422, `Footprint overlaps published plot ${assessment.overlaps[0].id.split(":")[0]}`);
   assessment.warnings.push("Reviewed structure and road-clearance checks are not available; inspect those relationships before publication.");
   return assessment;
+}
+
+function assessModelBinding(data, layout) {
+  if (data.model === null) return;
+  if (data.model.assetId !== "synthetic-building" || data.model.revision !== "v1" || !data.model.dimensions)
+    throw new HttpError(422, "Unsupported model or missing measured dimensions");
+  const project = footprintProjector(layout);
+  const anchor = project([data.frame.physicalAnchor.lon, data.frame.physicalAnchor.lat]);
+  let model;
+  try {
+    model = measuredStructureGeometry({
+      anchor, bearingDegrees: data.frame.headingDegrees,
+      pivot: [data.frame.pivot[0], data.frame.pivot[2]], dimensions: data.model.dimensions,
+      height: data.height?.metres ?? null,
+    });
+  } catch {
+    throw new HttpError(422, "Invalid model dimensions");
+  }
+  const actual = data.footprint.outer.slice(0, -1).map(project);
+  // 1 mm allows WGS84 conversion round-off, not survey uncertainty.
+  const matches = actual.length === model.footprint.length && actual.some((_, offset) =>
+    [1, -1].some((direction) => actual.every((point, index) => {
+      const expected = model.footprint[(offset + direction * index + actual.length) % actual.length];
+      return Math.hypot(point[0] - expected[0], point[1] - expected[1]) <= 0.001;
+    })));
+  if (!matches || data.footprint.holes.length || data.frame.pivot[1] !== 0)
+    throw new HttpError(422, "Model footprint does not match the reviewed footprint and ground pivot");
 }
 
 // Call under the spatial write lock for mutations. The same checks on reads
@@ -407,6 +435,7 @@ export function createApp(
       const parsed = contentSchemas.structure.safeParse(item.published);
       if (!parsed.success || !parsed.data.verifiedAt || !parsed.data.customerVisible) continue;
       try {
+        assessModelBinding(parsed.data, selectedLayout);
         await assessStructure(parsed.data, item.id, db, selectedLayout);
         publicStructures.add(item.id);
       } catch { /* Keep invalid or conflicting structures private. */ }
@@ -453,7 +482,10 @@ export function createApp(
                 footprint: { outer: item.published.footprint.outer, holes: item.published.footprint.holes },
                 frame: item.published.frame,
                 height: item.published.height ? { metres: item.published.height.metres } : null,
-                model: null,
+                model: item.published.model ? {
+                  assetId: item.published.model.assetId, revision: item.published.model.revision,
+                  dimensions: (({width, depth, cutoutWidth, cutoutDepth}) => ({width, depth, cutoutWidth, cutoutDepth}))(item.published.model.dimensions),
+                } : null,
               }) }
             : item.kind === "site_access"
             ? {
@@ -1409,8 +1441,6 @@ export function createApp(
       );
     if (body.publish) {
       requirePermission(req.user, "publish");
-      if (body.kind === "structure" && data.model !== null)
-        throw new HttpError(422, "Model publication is unavailable until asset binding and correspondence are supported");
       if (
         body.kind === "site_access" &&
         !reviewedVisitorAccess([
@@ -1441,6 +1471,7 @@ export function createApp(
             throw new HttpError(422, "Content kind cannot change");
           let structureAssessment;
           if (body.kind === "structure") {
+            if (body.publish) assessModelBinding(data, selectedLayout);
             if (body.publish && (!old || !(await tx.query("SELECT $1::jsonb = $2::jsonb AS same", [json(old.draft), json(data)])).rows[0].same))
               throw new HttpError(422, "Save the structure draft before reviewing and publishing it");
             structureAssessment = await assessStructure(data, req.params.id, tx, selectedLayout);

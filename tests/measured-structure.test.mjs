@@ -155,3 +155,29 @@ test("structure component creates and cleans up meshes on replacement and unmoun
     assert.equal(Component({ record: { ...publicRecord, published: null }, layout }), null);
   } finally { delete globalThis.__structureCleanup; }
 });
+
+
+test("published model uses its physical pivot and clockwise bearing independently of the visual outline", () => {
+  const item = structuredClone(publicRecord);
+  item.published.frame.physicalAnchor = planToGeographic({x:20,y:20},layout);
+  item.published.frame.headingDegrees = 90;
+  item.published.frame.pivot = [1,0,2];
+  item.published.height = {metres:4};
+  item.published.model = {assetId:"synthetic-building",revision:"v1",dimensions:{width:8,depth:5,cutoutWidth:3,cutoutDepth:2}};
+  const result = preparePublicStructure(item, layout);
+  assert.ok(result.model);
+  result.model.footprint.forEach((point, i) => point.forEach((v,j) => near(v, [[18,19],[18,27],[21,27],[21,24],[23,24],[23,19]][i][j])));
+  assert.equal(result.model.height,4);
+});
+
+
+test("procedural building front is visibly placed on its forward edge at the reviewed height", async () => {
+  const mod = await import("../shared/measured-structure.mjs");
+  assert.equal(typeof mod.createModelFrontGeometry, "function");
+  const geometry = mod.createModelFrontGeometry({footprint:[[0,0],[8,0],[8,-5],[5,-5],[5,-8],[0,-8]],height:4});
+  geometry.computeBoundingBox();
+  near(geometry.boundingBox.min.x,1); near(geometry.boundingBox.max.x,3);
+  near(geometry.boundingBox.min.y,0.8); near(geometry.boundingBox.max.y,3.2);
+  near(geometry.boundingBox.min.z,0); near(geometry.boundingBox.max.z,0);
+  geometry.dispose();
+});

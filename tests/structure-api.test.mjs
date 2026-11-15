@@ -442,3 +442,24 @@ test("publication rechecks current geometry and later plot or gate publication c
     shape(150, 150),
   );
 });
+
+
+test("reviewed procedural building binding publishes only matching sourced geometry", async () => {
+  const item = structure(100, 100);
+  item.footprint.outer = [[100,108],[108,108],[108,103],[105,103],[105,100],[100,100],[100,108]].map(point);
+  item.frame.physicalAnchor = planToGeographic({x:100,y:108}, layout);
+  item.frame.headingDegrees = 0;
+  item.height = {metres:4, source:"Synthetic height", sourceRevision:"height-1"};
+  item.model = {assetId:"synthetic-building", revision:"v1", rights:"Synthetic fixture", correspondence:"Synthetic measured outline", dimensions:{width:8, depth:8, cutoutWidth:3, cutoutDepth:3, source:"Synthetic measurements", sourceRevision:"dimensions-1"}};
+  check(await put("owner", "model-building", item, 0), 200);
+  check(await put("content_editor", "model-building", item, 1, true), 403);
+  check(await put("owner", "model-building", item, 1, true), 200);
+  const published = (await publicItems()).find((x) => x.id === "model-building").published;
+  assert.deepEqual(published.model, {assetId:"synthetic-building", revision:"v1", dimensions:{width:8,depth:8,cutoutWidth:3,cutoutDepth:3}});
+  assert.doesNotMatch(JSON.stringify(published), /Synthetic measurements|Synthetic measured outline|Synthetic fixture/);
+  const bad = structuredClone(item); bad.model.dimensions.width = 7;
+  check(await put("owner", "model-building", bad, 2), 200);
+  check(await put("owner", "model-building", bad, 2, true), 409);
+  check(await put("owner", "model-building", bad, 3, true), 422);
+  assert.deepEqual((await record("model-building")).published, item);
+});
