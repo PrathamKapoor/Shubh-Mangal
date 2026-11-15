@@ -183,6 +183,11 @@ test("mobile 3D leaves page scrolling available and keeps details outside the ca
   });
   try {
     const page = await context.newPage();
+    const documentRequests = [];
+    page.on("request", (request) => {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame())
+        documentRequests.push(request.url());
+    });
     await page.goto(
       "http://127.0.0.1:5181/explore?amenity=owner-ref-clubhouse",
     );
@@ -210,6 +215,9 @@ test("mobile 3D leaves page scrolling available and keeps details outside the ca
     await expect(
       card.getByRole("button", { name: "Close amenity details" }),
     ).toBeVisible();
+    expect(documentRequests).toEqual([
+      "http://127.0.0.1:5181/explore?amenity=owner-ref-clubhouse",
+    ]);
   } finally {
     await context.close();
   }
