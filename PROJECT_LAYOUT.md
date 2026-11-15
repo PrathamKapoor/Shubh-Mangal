@@ -6,7 +6,7 @@
 
 The project is one React/Vite website with a Node/Express API and an authenticated owner workspace. Its primary experience is an interactive colony explorer: visitors can use 2D source and illustrative views or an illustrative interactive 3D view, then inspect the same plot record, compare choices and submit an enquiry or visit request. Staff review source geometry and business information before publishing it.
 
-This guide inventories the current source tree. It intentionally does not enumerate installed dependencies, build output, local databases, environment secrets, uploaded media, test artifacts or screenshot contents. [docs/FILE_MANIFEST.json](docs/FILE_MANIFEST.json) records source/generated file paths, sizes and hashes where practical; [docs/ASSET_INVENTORY.md](docs/ASSET_INVENTORY.md) explains image origins and verification.
+This guide inventories the current source tree. It intentionally does not enumerate installed dependencies, build output, local databases, environment secrets, uploaded media, test artifacts or screenshot contents. [docs/ASSET_INVENTORY.md](docs/ASSET_INVENTORY.md) explains image origins and verification.
 
 ## 1. Website map
 
@@ -336,7 +336,7 @@ PLAYWRIGHT_CHROMIUM_EXECUTABLE=/opt/google/chrome/chrome npm run test:e2e
 npm run manifest
 ```
 
-The Chromium path is an example from the previous local environment; use the installed executable or Playwright-managed browser on another machine. The E2E server uses isolated test data. The last recorded full results are in [docs/3D_MASTER_IMPLEMENTATION.md](docs/3D_MASTER_IMPLEMENTATION.md); checks were not rerun to produce this documentation.
+The Chromium path is an example from the previous local environment; use the installed executable or Playwright-managed browser on another machine. The E2E server uses isolated test data. See [test coverage](docs/TEST_COVERAGE.md) for conditional browser test configuration.
 
 ## 8. Information that still needs review
 

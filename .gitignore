@@ -27,3 +27,14 @@ public/downloads/
 *.log
 *.dump
 *.tar.gz
+
+# Local working notes and release-process material
+/handoff.md
+/decisions.md
+/flow.md
+/*PROMPT*.md
+/*Prompt*.md
+/docs/GEOGRAPHIC_WORK_LEDGER.md
+/paper/
+/research/
+*.tex

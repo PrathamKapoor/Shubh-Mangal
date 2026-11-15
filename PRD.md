@@ -5,7 +5,7 @@
 **Status:** Working local application; colony information and launch decisions require owner review.  
 **Companion:** [Project layout and architecture](PROJECT_LAYOUT.md)
 
-This document describes the existing project, its intended product behaviour and the decisions still needed. “Implemented” means present in the inspected code and documentation; it does not mean a feature has been deployed or its business data verified. Previous test results are recorded in [the 3D implementation review](docs/3D_MASTER_IMPLEMENTATION.md); they were not rerun solely to write this document.
+This document describes the existing project, its intended product behaviour and the decisions still needed. “Implemented” means present in the inspected code and documentation; it does not mean a feature has been deployed or its business data verified. See [test coverage](docs/TEST_COVERAGE.md) for browser test configuration and its limits.
 
 ## 1. Product summary
 
@@ -154,5 +154,4 @@ Payments, booking/hold automation, a satellite basemap, live notification delive
 - [Project layout and architecture](PROJECT_LAYOUT.md)
 - [Data notes](docs/DATA_NOTES.md), [reconciliation guide](docs/RECONCILIATION.md) and [source audit](docs/DATA_AUDIT.json)
 - [Owner and visitor workflow](docs/WORKFLOW.md), [API contract](docs/API.md) and [deployment guide](docs/DEPLOYMENT.md)
-- [Visual asset inventory](docs/ASSET_INVENTORY.md) and [3D implementation review](docs/3D_MASTER_IMPLEMENTATION.md)
-- [Original project brief](CODEX_MASTER_PROMPT.md) and [3D master prompt](SHUBH_MANGAL_3D_MASTER_PROMPT.md)
+- [Visual asset inventory](docs/ASSET_INVENTORY.md)
