@@ -930,20 +930,33 @@ test("owner review UI stages identity, reviews, publishes and restores approved 
       (lead) => lead.data.name === "Synthetic Approved Buyer",
     ).data.plots[0].id,
   ).toBe(id);
+  // Restore the plot without animation, then wait for its actual fitted camera.
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goBack();
-  await page.waitForTimeout(350);
+  await expect(page.locator(".cell.selected")).toHaveAttribute("data-plot", id);
+  await page.waitForFunction(() => {
+    const svg = document.querySelector(".map-area > svg");
+    const selected = svg?.querySelector(".cell.selected");
+    if (!svg || !selected) return false;
+    const bounds = selected.getBBox();
+    const width = Math.max(bounds.width, 18);
+    const height = Math.max(bounds.height, 18);
+    const expected = [bounds.x - width * 0.7, bounds.y - height * 0.7, width * 2.4, height * 2.4];
+    const actual = svg.getAttribute("viewBox").split(/\s+/).map(Number);
+    // Rendered paths round coordinates; the camera uses unrounded plot bounds.
+    return actual.length === 4 && actual.every((value, index) => Math.abs(value - expected[index]) < 0.001);
+  });
   const pathBefore = await page.locator(".cell.selected").getAttribute("d");
-  const viewBefore = await page
-    .locator(".map-area > svg")
-    .getAttribute("viewBox");
+  const viewBefore = await page.locator(".map-area > svg").getAttribute("viewBox");
+  await expect(page.getByRole("button", { name: "Illustrated colony" })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "2D plan (Source drawing)" }).click();
+  await expect(page.getByRole("button", { name: "2D plan (Source drawing)" })).toHaveAttribute("aria-pressed", "true");
+  expect(await page.locator(".map-area > svg").getAttribute("viewBox")).toBe(viewBefore);
+  await expect(page.locator(".cell.selected")).toHaveAttribute("data-plot", id);
   await page.getByRole("button", { name: "Illustrated colony" }).click();
   await expect(page.locator(".map-panel")).toHaveClass(/view-colony/);
-  expect(await page.locator(".cell.selected").getAttribute("d")).toBe(
-    pathBefore,
-  );
-  expect(await page.locator(".map-area > svg").getAttribute("viewBox")).toBe(
-    viewBefore,
-  );
+  expect(await page.locator(".cell.selected").getAttribute("d")).toBe(pathBefore);
+  expect(await page.locator(".map-area > svg").getAttribute("viewBox")).toBe(viewBefore);
   await expect(page.locator(".cell.selected")).toHaveCount(1);
   await page
     .getByRole("button", { name: "Back to this plot in explorer" })
