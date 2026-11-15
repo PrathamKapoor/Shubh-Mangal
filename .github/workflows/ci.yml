@@ -61,3 +61,10 @@ jobs:
           ALLOW_DISPOSABLE_POSTGRES: "true"
           TEST_POSTGRES_MAJOR: "16"
           TEST_DATABASE_URL: postgresql://shubh_fixture:synthetic-ci-password@127.0.0.1:5432/shubh_test_control
+      - name: Check migration owner and runtime roles on PostgreSQL 16
+        run: node --test tests/postgres-roles.test.mjs
+        env:
+          RUN_POSTGRES_ROLE_CHECK: "true"
+          ALLOW_DISPOSABLE_POSTGRES: "true"
+          TEST_POSTGRES_MAJOR: "16"
+          TEST_DATABASE_URL: postgresql://shubh_fixture:synthetic-ci-password@127.0.0.1:5432/shubh_test_control
