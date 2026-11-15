@@ -25,6 +25,7 @@ import {
 import AmenityArtwork from "./AmenityArtwork";
 import AmenityFigure from "./AmenityFigure";
 import LeisureFacility from "./LeisureFacility";
+import { geographicToPlan } from "../../shared/geography.mjs";
 const Colony3D = lazy(() => import("./Colony3D"));
 const GoogleMapView = lazy(() => import("./GoogleMapView"));
 class ThreeLoadBoundary extends React.Component {
@@ -161,7 +162,22 @@ export default function MapCanvas({
     [size, setSize] = useState([600, 600]),
     [expanded, setExpanded] = useState(false),
     [activeAmenity, setActiveAmenity] = useState(null),
+    [accessSelected, setAccessSelected] = useState(false),
     [planImageStatus, setPlanImageStatus] = useState("loading");
+  const accessPath = useMemo(() => {
+    const footprint = visitorAccess?.footprint;
+    if (!footprint) return null;
+    try {
+      return [footprint.outer, ...footprint.holes].map((ring) =>
+        ring.map(([lon, lat], index) => {
+          const point = geographicToPlan({ lat, lon }, data);
+          return `${index ? "L" : "M"}${point.x} ${point.y}`;
+        }).join(" ") + " Z",
+      ).join(" ");
+    } catch {
+      return null;
+    }
+  }, [visitorAccess, data]);
   const plots = useMemo(() => {
     if (mapMode !== "colony" && mapMode !== "3d") return sourcePlots;
     const placements = new Map(
@@ -879,6 +895,14 @@ export default function MapCanvas({
                   : "Illustrative layout · not to scale"}
         </span>
       </div>
+      {visitorAccess?.footprint && (mapMode === "plan" || mapMode === "google" || mapMode === "3d") && (
+        <div className="reviewed-access-details">
+          <button type="button" onClick={() => setAccessSelected(!accessSelected)} aria-expanded={accessSelected}>
+            {hi ? "समीक्षित प्रवेश स्थल" : "Reviewed visitor entrance"}
+          </button>
+          {accessSelected && <p>{visitorAccess.title} · {hi ? "प्रकाशित भौतिक सीमा; रास्ते का बिंदु अलग हो सकता है।" : "Published physical footprint; the route-access point may differ."}</p>}
+        </div>
+      )}
       <div className="map-area">
         <svg
           ref={svg}
@@ -1912,6 +1936,13 @@ export default function MapCanvas({
               aria-hidden="true"
             />
           )}
+          {mapMode === "plan" && accessPath && (
+            <path d={accessPath} fill="#8257b8" fillOpacity=".45"
+              fillRule="evenodd" stroke="#533082" strokeWidth={2 / scale}
+              data-feature-id="visitor-entrance"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => { event.stopPropagation(); setAccessSelected(true); }} />
+          )}
           {visibleLabels.map((p) => (
             <text
               className="plot-label"
@@ -1994,6 +2025,7 @@ export default function MapCanvas({
                   hindi={hi}
                   stale={stale}
                   visitorAccess={visitorAccess}
+                  onAccessSelect={() => setAccessSelected(true)}
                   onExit={() => setMapMode("plan")}
                 />
               </Suspense>
@@ -2022,6 +2054,8 @@ export default function MapCanvas({
                   focusRequest={focusRequest}
                   onSelect={onSelect}
                   onAmenitySelect={openAmenity}
+                  visitorAccess={visitorAccess}
+                  onAccessSelect={() => setAccessSelected(true)}
                   onExit={() => setMapMode("colony")}
                   hindi={hi}
                 />

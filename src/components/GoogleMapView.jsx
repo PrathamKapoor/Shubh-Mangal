@@ -101,6 +101,7 @@ export default function GoogleMapView({
   hindi = false,
   stale = false,
   visitorAccess = null,
+  onAccessSelect,
 }) {
   const text = copy[hindi ? "hi" : "en"];
   const key = import.meta.env.VITE_GOOGLE_MAPS_KEY;
@@ -191,30 +192,42 @@ export default function GoogleMapView({
     const point = visitorAccess.physicalAnchor || visitorAccess.routeAccess;
     if (!point) return;
     const layer = new window.google.maps.Data();
+    const features = [
+      ...(visitorAccess.footprint ? [{
+        type: "Feature",
+        id: "visitor-entrance",
+        properties: { featureType: "entrance-footprint" },
+        geometry: { type: "Polygon", coordinates: [visitorAccess.footprint.outer, ...visitorAccess.footprint.holes] },
+      }] : []),
+      {
+        type: "Feature",
+        id: "visitor-entrance-anchor",
+        properties: { featureType: "entrance-anchor" },
+        geometry: { type: "Point", coordinates: [point.lon, point.lat] },
+      },
+    ];
     layer.addGeoJson({
       type: "FeatureCollection",
-      features: [
-        {
-          type: "Feature",
-          id: "visitor-entrance",
-          properties: { featureType: "entrance" },
-          geometry: { type: "Point", coordinates: [point.lon, point.lat] },
-        },
-      ],
+      features,
     });
     layer.setStyle({
       title: visitorAccess.physicalAnchor
         ? "Reviewed physical entrance anchor"
         : "Reviewed route-access point",
-      clickable: false,
+      clickable: true,
+      fillColor: "#8257b8",
+      fillOpacity: 0.45,
+      strokeColor: "#533082",
       zIndex: 5,
     });
+    const click = layer.addListener("click", () => onAccessSelect?.());
     layer.setMap(mapRef.current);
     return () => {
+      click?.remove();
       clearLayer(layer);
       layer.setMap(null);
     };
-  }, [ready, visitorAccess]);
+  }, [ready, visitorAccess, onAccessSelect]);
 
   useEffect(() => {
     if (!enabled || boundsKey === "null") return;

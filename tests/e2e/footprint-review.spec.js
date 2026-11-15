@@ -130,4 +130,12 @@ test("owner saves, stages, reloads and publishes a synthetic entrance footprint"
     outer: footprint.outer,
     holes: footprint.holes,
   });
+  await page.goto("/explore");
+  await page.getByRole("button", { name: "2D plan (Source drawing)" }).click();
+  await expect(page.locator('[data-feature-id="visitor-entrance"]')).toBeVisible();
+  const accessButton = page.getByRole("button", { name: "Reviewed visitor entrance" });
+  await accessButton.click();
+  await expect(page.getByText(/Synthetic entrance · Published physical footprint/)).toBeVisible();
+  await page.getByRole("button", { name: "3D colony" }).click();
+  await expect(accessButton).toHaveAttribute("aria-expanded", "true");
 });

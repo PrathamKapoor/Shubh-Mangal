@@ -31,19 +31,19 @@ const official = {
 // This adapter replaces only Google's network boundary. The actual component,
 // React lifecycle, matching, fetch, filtering and event handlers run unchanged.
 const adapter = `(() => {
-  const state = window.mapAdapter = {fits:0, pans:0, circles:[], features:[], type:'roadmap'};
+  const state = window.mapAdapter = {fits:0, pans:0, circles:[], features:[], layers:[], type:'roadmap'};
   class Circle {
     constructor(options){this.options=options;this.attached=!!options.map;state.circles.push(this);}
     setMap(map){this.attached=!!map;}
   }
   class Data {
-    constructor(){this.features=[];state.layer=this;}
+    constructor(){this.features=[];state.layer=this;state.layers.push(this);}
     setMap(map){state.attached=!!map;}
     addGeoJson(fc){state.geometries=Object.fromEntries(fc.features.map(f=>[f.id,f.geometry]));this.features=fc.features.map(f=>({getId:()=>f.id,getProperty:k=>f.properties[k]}));state.features=this.features.map(f=>f.getId());return this.features;}
     forEach(fn){[...this.features].forEach(fn);}
     remove(f){this.features=this.features.filter(x=>x!==f);state.features=this.features.map(f=>f.getId());}
-    setStyle(fn){state.styles=Object.fromEntries(this.features.map(f=>[f.getId(),fn(f)]));}
-    addListener(name,fn){state.click=fn;return {remove(){state.click=null;}};}
+    setStyle(fn){if(typeof fn==='function') state.styles=Object.fromEntries(this.features.map(f=>[f.getId(),fn(f)])); else this.style=fn;}
+    addListener(name,fn){this.click=fn;state.click=fn;return {remove(){state.click=null;}};}
   }
   class Map {
     constructor(element,options){state.type=options.mapTypeId;element.textContent='Native map fixture';}
@@ -152,6 +152,25 @@ test("native map matches features, styles filters, selects IDs and fits only exp
   await page.evaluate(() => window.unmountMap());
   expect(await page.evaluate(() => window.mapAdapter.attached)).toBe(false);
   expect(await page.evaluate(() => window.gm_authFailure)).toBeUndefined();
+});
+
+test("published entrance footprint is selectable on the controlled Google layer", async ({ page }) => {
+  test.skip(!providerEnabled, "Requires separate controlled-key environment.");
+  await mount(page);
+  await expect.poll(() => page.evaluate(() => typeof window.renderMap)).toBe("function");
+  await page.evaluate(() => window.renderMap({
+    visitorAccess: {
+      title: "Synthetic entrance", routeAccess: { lat: 24.466, lon: 74.908 },
+      physicalAnchor: null, footprint: { outer: [[74.908,24.466],[74.9081,24.466],[74.908,24.4661],[74.908,24.466]], holes: [] },
+    },
+    onAccessSelect: () => { window.accessChosen = true; },
+  }));
+  await expect.poll(() => page.evaluate(() => window.mapAdapter.layers.some(layer => layer.features.some(feature => feature.getId() === "visitor-entrance")))).toBe(true);
+  await page.evaluate(() => {
+    const layer = window.mapAdapter.layers.find(entry => entry.features.some(feature => feature.getId() === "visitor-entrance"));
+    layer.click({ feature: layer.features[0] });
+  });
+  expect(await page.evaluate(() => window.accessChosen)).toBe(true);
 });
 
 test("visitor location is intentional, shows metre uncertainty and never enters app requests or storage", async ({
