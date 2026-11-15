@@ -521,6 +521,17 @@ test("synthetic footprint is staged privately and only a saved draft can be publ
   const publicFootprint = (await project()).items[0].published.footprint;
   assert.deepEqual(publicFootprint, { outer: footprint.outer, holes: footprint.holes });
   assert.ok(!JSON.stringify(publicFootprint).includes("Synthetic survey fixture"));
+  await db.query("UPDATE plots SET publication='reviewed', data=$2 WHERE id=$1", [collisionId, JSON.stringify({ number: "collision", block: "TEST" })]);
+  const rejectedPublication = await clients.owner.agent
+    .patch(`/api/admin/plots/${collisionId}`)
+    .set("Origin", origin)
+    .set("X-CSRF-Token", clients.owner.csrf)
+    .set("Idempotency-Key", randomUUID())
+    .send({ publication: "published", expectedVersion: 1, reason: "Synthetic conflicting plot publication" });
+  expectStatus(rejectedPublication, 422);
+  assert.match(JSON.stringify(rejectedPublication.body), new RegExp(collisionId));
+  assert.equal((await db.query("SELECT publication FROM plots WHERE id=$1", [collisionId])).rows[0].publication, "reviewed");
+  assert.equal((await db.query("SELECT count(*)::int AS n FROM audit_logs WHERE entity_id=$1", [collisionId])).rows[0].n, 0);
   await db.query("UPDATE plots SET publication='published' WHERE id=$1", [collisionId]);
   const staleProject = await project();
   assert.equal(staleProject.siteAccessStatus, "needs_review");

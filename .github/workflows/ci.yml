@@ -68,3 +68,10 @@ jobs:
           ALLOW_DISPOSABLE_POSTGRES: "true"
           TEST_POSTGRES_MAJOR: "16"
           TEST_DATABASE_URL: postgresql://shubh_fixture:synthetic-ci-password@127.0.0.1:5432/shubh_test_control
+      - name: Check concurrent spatial publications on PostgreSQL 16
+        run: node --test tests/postgres-spatial-concurrency.test.mjs
+        env:
+          RUN_POSTGRES_SPATIAL_CHECK: "true"
+          ALLOW_DISPOSABLE_POSTGRES: "true"
+          TEST_POSTGRES_MAJOR: "16"
+          TEST_DATABASE_URL: postgresql://shubh_fixture:synthetic-ci-password@127.0.0.1:5432/shubh_test_control

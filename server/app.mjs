@@ -274,6 +274,12 @@ export function createApp(
       await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
         `${scope}:${key}`,
       ]);
+      // All supported spatial writes take one database-scoped transaction
+      // lock before reading state. This also covers new mappings, which cannot
+      // be protected by locking only rows found by a prior overlap query.
+      const spatial = /^(plot|content|site-access-footprint|geometry|geometry-stage|reconcile|import|inventory-import):/.test(scope);
+      if (spatial)
+        await tx.query("SELECT pg_advisory_xact_lock(19483,11479)");
       const cached = (
         await tx.query("SELECT * FROM idempotency WHERE scope=$1 AND key=$2", [
           scope,
@@ -289,6 +295,12 @@ export function createApp(
         return cached.response;
       }
       const result = await fn(tx);
+      if (scope.startsWith("plot:") && req.body.publication === "published") {
+        const items = (await tx.query("SELECT id,kind,published FROM content WHERE id='visitor-entrance' AND published IS NOT NULL")).rows;
+        const access = reviewedVisitorAccess(items);
+        if (access?.footprint)
+          await assessAccessFootprint(access.footprint, tx, selectedLayout);
+      }
       await tx.query(
         "INSERT INTO idempotency(scope,key,request_hash,response) VALUES($1,$2,$3,$4)",
         [scope, key, digest, json(result)],
