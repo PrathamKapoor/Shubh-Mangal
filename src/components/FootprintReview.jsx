@@ -99,6 +99,62 @@ function shapePath(shape, layout) {
     })
     .join(" ");
 }
+
+// Reject the whole snapshot if any published mapping cannot be drawn safely.
+function publishedPaths(collection, layout) {
+  if (
+    collection?.type !== "FeatureCollection" ||
+    !Array.isArray(collection.features) ||
+    !Array.isArray(collection.mappings)
+  )
+    return null;
+  const mappingIds = collection.mappings.map((mapping) => mapping?.plot_id);
+  const featureIds = collection.features.map((feature) => feature?.id);
+  if (
+    mappingIds.some((id) => typeof id !== "string" || !id) ||
+    new Set(mappingIds).size !== mappingIds.length ||
+    new Set(featureIds).size !== featureIds.length ||
+    mappingIds.length !== featureIds.length ||
+    featureIds.some((id) => !mappingIds.includes(id))
+  )
+    return null;
+  const paths = [];
+  for (const feature of collection.features) {
+    const geometry = feature.geometry;
+    const polygons =
+      geometry?.type === "Polygon"
+        ? [geometry.coordinates]
+        : geometry?.type === "MultiPolygon"
+          ? geometry.coordinates
+          : null;
+    if (
+      feature.type !== "Feature" ||
+      !Array.isArray(polygons) ||
+      !polygons.length
+    )
+      return null;
+    for (const [index, rings] of polygons.entries()) {
+      if (!Array.isArray(rings) || !rings.length) return null;
+      const commands = [];
+      for (const ring of rings) {
+        if (
+          !Array.isArray(ring) ||
+          ring.length < 4 ||
+          JSON.stringify(ring[0]) !== JSON.stringify(ring[ring.length - 1])
+        )
+          return null;
+        const points = ring.map((point) => projected(point, layout));
+        if (!points.every(Boolean)) return null;
+        commands.push(
+          `M ${points.map((point) => `${point.x} ${point.y}`).join(" L ")} Z`,
+        );
+      }
+      paths.push({ id: feature.id, index, d: commands.join(" ") });
+    }
+  }
+  return paths;
+}
+
 export default function FootprintReview({ item, busy, onStage }) {
   const [value, setValue] = useState(
     () => item.draft?.footprint || emptyFootprint,
@@ -108,6 +164,9 @@ export default function FootprintReview({ item, busy, onStage }) {
   const [assessment, setAssessment] = useState(null);
   const [layout, setLayout] = useState(null);
   const [layoutError, setLayoutError] = useState(false);
+  const [showPublished, setShowPublished] = useState(true);
+  const [parcelRefresh, setParcelRefresh] = useState(0);
+  const [parcels, setParcels] = useState({ status: "loading", paths: [] });
   useEffect(() => {
     const controller = new AbortController();
     fetch("/data/layout.json", { signal: controller.signal })
@@ -121,6 +180,41 @@ export default function FootprintReview({ item, busy, onStage }) {
       });
     return () => controller.abort();
   }, []);
+  useEffect(() => {
+    if (!layout) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    setParcels({ status: "loading", paths: [] });
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    fetch("/api/public/geometry", {
+      signal: controller.signal,
+      cache: "no-store",
+    })
+      .then((response) => {
+        if (!response.ok) throw Error("Geometry unavailable");
+        return response.json();
+      })
+      .then((collection) => {
+        if (cancelled) return;
+        const paths = publishedPaths(collection, layout);
+        if (!paths) setParcels({ status: "incomplete", paths: [] });
+        else
+          setParcels({
+            status: paths.length ? "ready" : "empty",
+            paths,
+            count: collection.features.length,
+          });
+      })
+      .catch(() => {
+        if (!cancelled) setParcels({ status: "error", paths: [] });
+      })
+      .finally(() => clearTimeout(timeout));
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [layout, parcelRefresh]);
   const update = (patch) => {
     setValue((v) => ({ ...v, ...patch }));
     setAssessment(null);
@@ -200,6 +294,34 @@ export default function FootprintReview({ item, busy, onStage }) {
         . Staging uses the saved access draft and leaves other unsaved edits
         here unchanged.
       </p>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={showPublished}
+          onChange={(e) => setShowPublished(e.target.checked)}
+        />{" "}
+        Show published mapped parcels
+      </label>
+      <div role="status">
+        {layoutError
+          ? "Published mapped parcels unavailable without the source layout."
+          : parcels.status === "loading"
+            ? "Loading published mapped parcels…"
+            : parcels.status === "error"
+              ? "Published mapped parcels are unavailable. The layer has been cleared."
+              : parcels.status === "incomplete"
+                ? "Published mapped parcels are incomplete or invalid. The layer has been cleared."
+                : parcels.status === "empty"
+                  ? "No published mapped parcels in this snapshot."
+                  : `Published mapped parcels: ${parcels.count}. Snapshot may change; refresh before review.`}
+      </div>
+      <button
+        type="button"
+        disabled={!layout || parcels.status === "loading"}
+        onClick={() => setParcelRefresh((n) => n + 1)}
+      >
+        Refresh published parcels
+      </button>
       {layout && box && (
         <svg
           className="footprint-map"
@@ -227,6 +349,20 @@ export default function FootprintReview({ item, busy, onStage }) {
           {layout.plots?.map((p) => (
             <path key={p.id} d={p.path} className="footprint-parcel" />
           ))}
+          {showPublished &&
+            parcels.paths.map((path) => (
+              <path
+                key={`${path.id}-${path.index}`}
+                data-published-parcel={path.id}
+                d={path.d}
+                fillRule="evenodd"
+                fill="#266c9740"
+                stroke="#155575"
+                strokeWidth="1.5"
+                strokeDasharray="5 2"
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
           {originalPath && (
             <path
               d={originalPath}
@@ -275,7 +411,8 @@ export default function FootprintReview({ item, busy, onStage }) {
       )}
       <p className="footprint-legend">
         Dashed blue: published original · Solid red: proposed · Grey: source
-        roads · Outlines: source parcels · Purple: declared road/gate
+        roads · Outlines: provisional source parcels · Dashed teal: published
+        mapped parcels (snapshot) · Purple: declared road/gate
       </p>
       <label>
         Import footprint JSON
@@ -488,9 +625,9 @@ export default function FootprintReview({ item, busy, onStage }) {
           )}
           <p>
             Staging and publication check positive-area overlap with current
-            published mapped parcels. Draft parcels, structures and road clearance
-            are not checked. This does not establish a surveyed location or prove
-            clearance.
+            published mapped parcels. Draft parcels, structures and road
+            clearance are not checked. This does not establish a surveyed
+            location or prove clearance.
           </p>
         </div>
       )}
