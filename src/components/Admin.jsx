@@ -1795,6 +1795,11 @@ function ContentEditor({ item, run, mutate, user, busy }) {
             : item.draft,
     ),
     [id, setId] = useState(item.id),
+    [footprintText, setFootprintText] = useState(() =>
+      item.draft?.footprint
+        ? JSON.stringify(item.draft.footprint, null, 2)
+        : "",
+    ),
     [imageFile, setImageFile] = useState(null),
     [showPicker, setShowPicker] = useState(false);
   const templates = {
@@ -1927,190 +1932,236 @@ function ContentEditor({ item, run, mutate, user, busy }) {
           </label>
         )}
         {kind === "site_access" && (
-          <p className="small">
+          <div className="small">
             Publication requires existing status, a reviewed source and
             revision, a review date, and route access coordinates. Physical
             anchor and heading are optional.
-          </p>
+            <p>
+              Footprint coordinates must be WGS84 [longitude, latitude], with a
+              separate source and sourceRevision. This pilot does not establish
+              a measured location. Road crossings require review.
+            </p>
+            <label>
+              Footprint JSON
+              <textarea
+                rows={8}
+                value={footprintText}
+                onChange={(e) => setFootprintText(e.target.value)}
+              />
+            </label>
+            <p>
+              Stage the footprint separately on a saved visitor access record.
+              Staging preserves the published record and uses the saved access
+              draft; save other edits separately first. Ordinary content saves
+              retain their existing unpublish behavior.
+            </p>
+            <button
+              type="button"
+              disabled={busy || item.id !== "visitor-entrance"}
+              onClick={(e) => {
+                const reason = e.currentTarget.form.elements.reason.value;
+                run(
+                  () =>
+                    mutate(
+                      "/admin/content/visitor-entrance/footprint",
+                      {
+                        footprint: JSON.parse(footprintText),
+                        expectedVersion: item.version,
+                        reason,
+                      },
+                      "PUT",
+                    ),
+                  "Footprint staged privately. Review road crossings and the saved draft before publishing.",
+                );
+              }}
+            >
+              Stage footprint
+            </button>
+          </div>
         )}
         <div className="form-grid">
-          {Object.entries(draft).map(([key, value]) =>
-            ["entrance", "location", "routeAccess", "physicalAnchor"].includes(
-              key,
-            ) ? (
-              <div key={key}>
-                <label>
-                  {
+          {Object.entries(draft)
+            .filter(([key]) => key !== "footprint")
+            .map(([key, value]) =>
+              [
+                "entrance",
+                "location",
+                "routeAccess",
+                "physicalAnchor",
+              ].includes(key) ? (
+                <div key={key}>
+                  <label>
                     {
-                      entrance: "Entrance",
-                      location: "Amenity",
-                      routeAccess: "Route access",
-                      physicalAnchor: "Physical anchor",
-                    }[key]
-                  }{" "}
-                  latitude (confirm before publishing)
-                  <input
-                    type="number"
-                    step="any"
-                    value={value?.lat ?? ""}
-                    onChange={(e) =>
-                      setDraft((d) => ({
-                        ...d,
-                        [key]: e.target.value
-                          ? {
-                              lat: Number(e.target.value),
-                              lon: d[key]?.lon ?? null,
-                            }
-                          : d[key]?.lon != null
-                            ? { lat: null, lon: d[key].lon }
-                            : null,
-                      }))
-                    }
-                  />
-                </label>
-                <label>
-                  {
+                      {
+                        entrance: "Entrance",
+                        location: "Amenity",
+                        routeAccess: "Route access",
+                        physicalAnchor: "Physical anchor",
+                      }[key]
+                    }{" "}
+                    latitude (confirm before publishing)
+                    <input
+                      type="number"
+                      step="any"
+                      value={value?.lat ?? ""}
+                      onChange={(e) =>
+                        setDraft((d) => ({
+                          ...d,
+                          [key]: e.target.value
+                            ? {
+                                lat: Number(e.target.value),
+                                lon: d[key]?.lon ?? null,
+                              }
+                            : d[key]?.lon != null
+                              ? { lat: null, lon: d[key].lon }
+                              : null,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>
                     {
-                      entrance: "Entrance",
-                      location: "Amenity",
-                      routeAccess: "Route access",
-                      physicalAnchor: "Physical anchor",
-                    }[key]
-                  }{" "}
-                  longitude
-                  <input
-                    type="number"
-                    step="any"
-                    value={value?.lon ?? ""}
-                    onChange={(e) =>
-                      setDraft((d) => ({
-                        ...d,
-                        [key]: e.target.value
-                          ? {
-                              lat: d[key]?.lat ?? null,
-                              lon: Number(e.target.value),
-                            }
-                          : d[key]?.lat != null
-                            ? { lat: d[key].lat, lon: null }
-                            : null,
-                      }))
-                    }
-                  />
-                </label>
-                {key === "location" && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setShowPicker(!showPicker)}
-                    >
-                      {showPicker
-                        ? "Close position picker"
-                        : "Adjust position on plan"}
-                    </button>
-                    {showPicker && (
-                      <Suspense
-                        fallback={<p role="status">Loading the plan…</p>}
+                      {
+                        entrance: "Entrance",
+                        location: "Amenity",
+                        routeAccess: "Route access",
+                        physicalAnchor: "Physical anchor",
+                      }[key]
+                    }{" "}
+                    longitude
+                    <input
+                      type="number"
+                      step="any"
+                      value={value?.lon ?? ""}
+                      onChange={(e) =>
+                        setDraft((d) => ({
+                          ...d,
+                          [key]: e.target.value
+                            ? {
+                                lat: d[key]?.lat ?? null,
+                                lon: Number(e.target.value),
+                              }
+                            : d[key]?.lat != null
+                              ? { lat: d[key].lat, lon: null }
+                              : null,
+                        }))
+                      }
+                    />
+                  </label>
+                  {key === "location" && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setShowPicker(!showPicker)}
                       >
-                        <MapPositionEditor
-                          referenceId={id}
-                          location={value}
-                          imageUrl={draft.imageUrl}
-                          visualScale={draft.visualScale}
-                          visualRotation={draft.visualRotation}
-                          onChange={(location) =>
-                            setDraft((d) => ({ ...d, location }))
-                          }
-                        />
-                      </Suspense>
-                    )}
-                  </>
-                )}
-              </div>
-            ) : typeof value === "boolean" ? (
-              <label className="check" key={key}>
-                <input
-                  type="checkbox"
-                  checked={value}
-                  onChange={(e) =>
-                    setDraft({ ...draft, [key]: e.target.checked })
-                  }
-                />
-                {key === "customerVisible"
-                  ? "Visible to customers after publication"
-                  : key}
-              </label>
-            ) : (
-              <label key={key}>
-                {{
-                  title: "Name (English)",
-                  titleHi: "Name (Hindi)",
-                  description: "Description",
-                  category: "Category",
-                  state: "Status",
-                  source: "Source",
-                  sourceRevision: "Source revision / date (required)",
-                  verifiedAt: "Last reviewed (ISO date/time)",
-                  headingDegrees:
-                    "Heading (degrees clockwise from north, optional)",
-                  imageUrl: "Image path",
-                  imageKind: "Image type",
-                  placementPrecision: "Location precision",
-                  visualScale: "Marker scale",
-                  visualRotation: "Marker rotation (degrees)",
-                }[key] || key}
-                {choices[key] ? (
-                  <select
-                    value={value}
-                    onChange={(e) =>
-                      setDraft({ ...draft, [key]: e.target.value })
-                    }
-                  >
-                    {choices[key].map((s) => (
-                      <option key={s}>{s}</option>
-                    ))}
-                  </select>
-                ) : (
+                        {showPicker
+                          ? "Close position picker"
+                          : "Adjust position on plan"}
+                      </button>
+                      {showPicker && (
+                        <Suspense
+                          fallback={<p role="status">Loading the plan…</p>}
+                        >
+                          <MapPositionEditor
+                            referenceId={id}
+                            location={value}
+                            imageUrl={draft.imageUrl}
+                            visualScale={draft.visualScale}
+                            visualRotation={draft.visualRotation}
+                            onChange={(location) =>
+                              setDraft((d) => ({ ...d, location }))
+                            }
+                          />
+                        </Suspense>
+                      )}
+                    </>
+                  )}
+                </div>
+              ) : typeof value === "boolean" ? (
+                <label className="check" key={key}>
                   <input
-                    value={value ?? ""}
-                    type={
-                      typeof value === "number" ||
-                      ["lat", "lon", "distanceKm", "headingDegrees"].includes(
-                        key,
-                      )
-                        ? "number"
-                        : "text"
-                    }
-                    step="any"
-                    min={key === "headingDegrees" ? 0 : undefined}
-                    placeholder={
-                      key === "verifiedAt"
-                        ? "ISO date/time, e.g. YYYY-MM-DDT00:00:00Z"
-                        : ""
-                    }
+                    type="checkbox"
+                    checked={value}
                     onChange={(e) =>
-                      setDraft({
-                        ...draft,
-                        [key]:
-                          typeof value === "number" ||
-                          [
-                            "lat",
-                            "lon",
-                            "distanceKm",
-                            "headingDegrees",
-                          ].includes(key)
-                            ? e.target.value === ""
-                              ? null
-                              : Number(e.target.value)
-                            : key === "verifiedAt"
-                              ? e.target.value || null
-                              : e.target.value,
-                      })
+                      setDraft({ ...draft, [key]: e.target.checked })
                     }
                   />
-                )}
-              </label>
-            ),
-          )}
+                  {key === "customerVisible"
+                    ? "Visible to customers after publication"
+                    : key}
+                </label>
+              ) : (
+                <label key={key}>
+                  {{
+                    title: "Name (English)",
+                    titleHi: "Name (Hindi)",
+                    description: "Description",
+                    category: "Category",
+                    state: "Status",
+                    source: "Source",
+                    sourceRevision: "Source revision / date (required)",
+                    verifiedAt: "Last reviewed (ISO date/time)",
+                    headingDegrees:
+                      "Heading (degrees clockwise from north, optional)",
+                    imageUrl: "Image path",
+                    imageKind: "Image type",
+                    placementPrecision: "Location precision",
+                    visualScale: "Marker scale",
+                    visualRotation: "Marker rotation (degrees)",
+                  }[key] || key}
+                  {choices[key] ? (
+                    <select
+                      value={value}
+                      onChange={(e) =>
+                        setDraft({ ...draft, [key]: e.target.value })
+                      }
+                    >
+                      {choices[key].map((s) => (
+                        <option key={s}>{s}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={value ?? ""}
+                      type={
+                        typeof value === "number" ||
+                        ["lat", "lon", "distanceKm", "headingDegrees"].includes(
+                          key,
+                        )
+                          ? "number"
+                          : "text"
+                      }
+                      step="any"
+                      min={key === "headingDegrees" ? 0 : undefined}
+                      placeholder={
+                        key === "verifiedAt"
+                          ? "ISO date/time, e.g. YYYY-MM-DDT00:00:00Z"
+                          : ""
+                      }
+                      onChange={(e) =>
+                        setDraft({
+                          ...draft,
+                          [key]:
+                            typeof value === "number" ||
+                            [
+                              "lat",
+                              "lon",
+                              "distanceKm",
+                              "headingDegrees",
+                            ].includes(key)
+                              ? e.target.value === ""
+                                ? null
+                                : Number(e.target.value)
+                              : key === "verifiedAt"
+                                ? e.target.value || null
+                                : e.target.value,
+                        })
+                      }
+                    />
+                  )}
+                </label>
+              ),
+            )}
         </div>
         {(kind === "amenity" || kind === "media") && (
           <div className="note">

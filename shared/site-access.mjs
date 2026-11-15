@@ -16,6 +16,43 @@ const point = z
   })
   .strict();
 
+// Canonical coordinates are WGS84 [longitude, latitude], never plan metres.
+const geoPoint = z.tuple([
+  z.number().min(-180).max(180),
+  z.number().min(-90).max(90),
+]);
+const ring = z.array(geoPoint).min(4).max(100);
+export const siteAccessFootprintSchema = z
+  .object({
+    datum: z.literal("WGS84"),
+    source: text.min(5),
+    sourceRevision: text.min(1),
+    outer: ring,
+    holes: z.array(ring).max(8),
+    interactions: z
+      .array(
+        z.discriminatedUnion("type", [
+          z
+            .object({
+              type: z.literal("road"),
+              id: text.min(1).max(80),
+              segment: z.tuple([geoPoint, geoPoint]),
+            })
+            .strict(),
+          z
+            .object({
+              type: z.literal("gate"),
+              id: text.min(1).max(80),
+              roadId: text.min(1).max(80),
+              point: geoPoint,
+            })
+            .strict(),
+        ]),
+      )
+      .max(20),
+  })
+  .strict();
+
 // Shared validation keeps publication consumers and the content schema aligned.
 // Null coordinates/date allow private drafts, not a usable visitor entrance.
 export const siteAccessSchema = z
@@ -24,6 +61,7 @@ export const siteAccessSchema = z
     routeAccess: point.nullable(),
     physicalAnchor: point.nullable(),
     headingDegrees: z.number().min(0).lt(360).nullable().optional(),
+    footprint: siteAccessFootprintSchema.optional(),
     state: z.enum([
       "confirmation_pending",
       "planned",

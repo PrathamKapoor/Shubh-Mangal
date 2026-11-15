@@ -375,3 +375,143 @@ test("visitor entrance lifecycle preserves original project entrance evidence an
     { id: "project", kind: "setting", published: legacy },
   ]);
 });
+
+test("synthetic footprint is staged privately and only a saved draft can be published", async () => {
+  const footprint = {
+    datum: "WGS84",
+    source: "Synthetic survey fixture",
+    sourceRevision: "fixture-1",
+    outer: [
+      [74.908, 24.466],
+      [74.9081, 24.466],
+      [74.9081, 24.4661],
+      [74.908, 24.4661],
+      [74.908, 24.466],
+    ],
+    holes: [],
+    interactions: [
+      {
+        type: "road",
+        id: "approach",
+        segment: [
+          [74.90802, 24.466],
+          [74.90802, 24.46605],
+        ],
+      },
+      {
+        type: "gate",
+        id: "gate",
+        roadId: "approach",
+        point: [74.90802, 24.466],
+      },
+    ],
+  };
+  await insertPublished(reviewed);
+  const stage = (role, shape, version = 1) =>
+    clients[role].agent
+      .put(`/api/admin/content/${id}/footprint`)
+      .set("Origin", origin)
+      .set("X-CSRF-Token", clients[role].csrf)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        footprint: shape,
+        expectedVersion: version,
+        reason: "Synthetic footprint staging",
+      });
+  expectStatus(
+    await request(app)
+      .put(`/api/admin/content/${id}/footprint`)
+      .set("Origin", origin)
+      .send({
+        footprint,
+        expectedVersion: 1,
+        reason: "Synthetic footprint staging",
+      }),
+    401,
+  );
+  expectStatus(
+    await clients.owner.agent
+      .put(`/api/admin/content/${id}/footprint`)
+      .set("Origin", origin)
+      .set("Idempotency-Key", randomUUID())
+      .send({
+        footprint,
+        expectedVersion: 1,
+        reason: "Synthetic footprint staging",
+      }),
+    403,
+  );
+  expectStatus(
+    await stage("content_editor", {
+      ...footprint,
+      outer: footprint.outer.slice(0, -1),
+    }),
+    422,
+  );
+  expectStatus(
+    await stage("content_editor", { ...footprint, datum: "metres" }),
+    422,
+  );
+  expectStatus(
+    await stage("content_editor", { ...footprint, sourceRevision: "" }),
+    422,
+  );
+  expectStatus(
+    await stage("content_editor", {
+      ...footprint,
+      outer: [
+        [0, 0],
+        [10, 0],
+        [10, 10],
+        [0, 0],
+      ],
+    }),
+    422,
+  );
+  assert.deepEqual((await record()).published, reviewed);
+  expectStatus(
+    await put(
+      "owner",
+      { ...reviewed, footprint },
+      { version: 1, publish: true },
+    ),
+    422,
+  );
+  const saved = await stage("content_editor", footprint);
+  expectStatus(saved, 200);
+  assert.deepEqual(saved.body.published, reviewed);
+  assert.deepEqual(saved.body.draft.footprint, footprint);
+  assert.ok(saved.body.footprintAssessment.warnings.length > 0);
+  assert.deepEqual((await project()).items[0].published, reviewed);
+  expectStatus(await stage("owner", footprint, 1), 409);
+  expectStatus(
+    await put("content_editor", saved.body.draft, {
+      version: 2,
+      publish: true,
+    }),
+    403,
+  );
+  expectStatus(
+    await put(
+      "owner",
+      { ...saved.body.draft, title: "Changed after staging" },
+      { version: 2, publish: true },
+    ),
+    422,
+  );
+  const published = await put("owner", saved.body.draft, {
+    version: 2,
+    publish: true,
+  });
+  expectStatus(published, 200);
+  assert.deepEqual((await project()).items[0].published.footprint, footprint);
+  const entries = await auditRows();
+  assert.ok(
+    entries.some(
+      (entry) =>
+        entry.action === "site_access.footprint.stage" &&
+        entry.actor_id === clients.content_editor.id &&
+        entry.new_value.version === 2,
+    ),
+  );
+});

@@ -46,10 +46,55 @@ import {
 } from "../shared/owner-amenity-references.mjs";
 import { stageImage, mediaFile } from "./media.mjs";
 import { publicGeometry } from "./public-geometry.mjs";
-import { reviewedVisitorAccess } from "../shared/site-access.mjs";
+import {
+  reviewedVisitorAccess,
+  siteAccessFootprintSchema,
+} from "../shared/site-access.mjs";
+import { geographicToPlan as projectFootprintPoint } from "../shared/geography.mjs";
+import { validateFootprint, assessFootprint } from "../shared/footprint.mjs";
 import { createSiteConfig, plotPageTitle } from "../shared/site-config.mjs";
 const uuid = z.uuid();
 const json = (v) => JSON.stringify(v);
+function assessAccessFootprint(footprint) {
+  const project = ([lon, lat]) => {
+    // The source layout's UTM zone is not a global projection.
+    const [west, south, east] = sourceLayout.geographicBounds;
+    if (
+      Math.abs(lon - (west + east) / 2) > 3 ||
+      (south >= 0 ? lat < 0 : lat > 0) ||
+      lat < -80 ||
+      lat > 84
+    )
+      throw new HttpError(
+        422,
+        "Footprint is outside the layout projection region",
+      );
+    const { x, y } = projectFootprintPoint({ lon, lat }, sourceLayout);
+    return [x, y];
+  };
+  const projected = {
+    outer: footprint.outer.map(project),
+    holes: footprint.holes.map((r) => r.map(project)),
+    interactions: footprint.interactions.map((i) =>
+      i.type === "road"
+        ? { ...i, segment: i.segment.map(project) }
+        : { ...i, point: project(i.point) },
+    ),
+  };
+  if (!validateFootprint(projected).valid)
+    throw new HttpError(
+      422,
+      "Invalid footprint topology or access interactions",
+    );
+  const [x, y, w, h] = sourceLayout.viewBox;
+  const assessment = assessFootprint(projected, {
+    bounds: [x, y, x + w, y + h],
+    polygons: [],
+  });
+  if (!assessment.withinBounds)
+    throw new HttpError(422, "Footprint is outside the source plan extent");
+  return assessment;
+}
 export function createApp(
   db,
   {
@@ -1059,6 +1104,63 @@ export function createApp(
       );
     },
   );
+  app.put(
+    "/api/admin/content/visitor-entrance/footprint",
+    auth("content"),
+    async (req, res) => {
+      const body = z
+        .object({
+          footprint: siteAccessFootprintSchema,
+          expectedVersion: z.number().int().min(1),
+          reason,
+        })
+        .strict()
+        .parse(req.body);
+      const assessment = assessAccessFootprint(body.footprint);
+      res.json(
+        await idempotent(
+          req,
+          `site-access-footprint:${req.user.id}`,
+          async (tx) => {
+            const old = (
+              await tx.query("SELECT * FROM content WHERE id=$1", [
+                "visitor-entrance",
+              ])
+            ).rows[0];
+            if (!old || old.kind !== "site_access")
+              throw new HttpError(
+                404,
+                "Save visitor access before staging a footprint",
+              );
+            if (old.version !== body.expectedVersion)
+              throw new HttpError(409, "Content changed; reload it");
+            const draft = contentSchemas.site_access.parse({
+              ...old.draft,
+              footprint: body.footprint,
+            });
+            const updated = (
+              await tx.query(
+                "UPDATE content SET draft=$1,version=version+1,updated_at=now() WHERE id=$2 AND version=$3 RETURNING *",
+                [json(draft), "visitor-entrance", body.expectedVersion],
+              )
+            ).rows[0];
+            if (!updated)
+              throw new HttpError(409, "Content changed; reload it");
+            await audit(
+              tx,
+              req.user,
+              "site_access.footprint.stage",
+              "visitor-entrance",
+              old,
+              updated,
+              body.reason,
+            );
+            return { ...updated, footprintAssessment: assessment };
+          },
+        ),
+      );
+    },
+  );
   app.put("/api/admin/content/:id", auth("content"), async (req, res) => {
     const body = z
       .object({
@@ -1078,6 +1180,14 @@ export function createApp(
       .strict()
       .parse(req.body);
     const data = contentSchemas[body.kind].parse(body.data);
+    if (body.kind === "site_access" && data.footprint) {
+      assessAccessFootprint(data.footprint);
+      if (!body.publish)
+        throw new HttpError(
+          422,
+          "Use the footprint staging action to preserve published access",
+        );
+    }
     const reference = referenceFor(req.params.id);
     if (reference && body.kind !== "amenity")
       throw new HttpError(
@@ -1147,6 +1257,22 @@ export function createApp(
             throw new HttpError(409, "Content changed; reload it");
           if (old && old.kind !== body.kind)
             throw new HttpError(422, "Content kind cannot change");
+          if (
+            body.kind === "site_access" &&
+            data.footprint &&
+            body.publish &&
+            (!old ||
+              !(
+                await tx.query("SELECT $1::jsonb = $2::jsonb AS same", [
+                  json(old.draft),
+                  json(data),
+                ])
+              ).rows[0].same)
+          )
+            throw new HttpError(
+              422,
+              "Save the footprint draft before reviewing and publishing it",
+            );
           if (body.kind === "presentation") {
             if (
               body.publish &&
