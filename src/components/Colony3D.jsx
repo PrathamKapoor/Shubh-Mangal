@@ -1,7 +1,7 @@
 import React, { Component, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import ReviewedFootprint3D from "./ReviewedFootprint3D";
-import MeasuredStructure from "./MeasuredStructure";
+import MeasuredStructure, { MeasuredGate } from "./MeasuredStructure";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
@@ -749,6 +749,7 @@ export default function Colony3D({
   onAccessSelect,
   structures = [],
   selectedStructure,
+  accessSelected,
 }) {
   const [available, setAvailable] = useState(webGLAvailable);
   const [touchMode, setTouchMode] = useState(false);
@@ -799,7 +800,14 @@ export default function Colony3D({
       return { x: point.x, y: point.y, distance: 40 };
     } catch { return null; }
   }, [structures, selectedStructure, data]);
-  const focusTarget = structureTarget || (
+  const accessTarget = useMemo(() => {
+    if (!accessSelected || !visitorAccess?.physicalAnchor) return null;
+    try {
+      const point = geographicToPlan(visitorAccess.physicalAnchor, data, { enforceBounds: true });
+      return {x:point.x,y:point.y,distance:40};
+    } catch { return null; }
+  }, [accessSelected,visitorAccess,data]);
+  const focusTarget = structureTarget || accessTarget || (
     Number.isFinite(selectedFacility?.mapPoint?.x) &&
     Number.isFinite(selectedFacility?.mapPoint?.y)
       ? selectedFacility.id === "owner-ref-clubhouse"
@@ -876,6 +884,7 @@ export default function Colony3D({
             <directionalLight position={[100, 300, 50]} intensity={1.7} />
             <WebGLGuard onLost={() => setAvailable(false)} />
             <ReviewedFootprint3D access={visitorAccess} layout={data} onSelect={onAccessSelect} />
+            <MeasuredGate access={visitorAccess} layout={data} onSelect={onAccessSelect} />
             {Array.isArray(structures) && structures.map((record) =>
               typeof record?.id === "string" && record.id.trim() ? (
                 <MeasuredStructure key={record.id} record={record} layout={data} />
@@ -971,7 +980,7 @@ export default function Colony3D({
             <FocusTarget
               api={controls}
               target={focusTarget}
-              targetKey={`${selectedStructure || selectedAmenity || selected || selectedBlock || ""}:${focusRequest || 0}`}
+              targetKey={`${selectedStructure || (accessSelected ? "visitor-entrance" : "") || selectedAmenity || selected || selectedBlock || ""}:${focusRequest || 0}`}
             />
           </Canvas>
         </SceneError>

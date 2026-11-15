@@ -3,7 +3,7 @@ import { can, roles, statuses, parseLength } from "../../shared/domain.mjs";
 import { api, downloadJSON } from "../services/api";
 import PresentationEditor from "./PresentationEditor";
 import FootprintReview from "./FootprintReview";
-import StructureFields from "./StructureFields";
+import StructureFields, { GateModelFields } from "./StructureFields";
 const MapPositionEditor = lazy(() => import("./MapPositionEditor"));
 function EvidenceEditor({
   initial,
@@ -1955,6 +1955,7 @@ function ContentEditor({ item, run, mutate, user, busy }) {
         {kind === "site_access" && (
           <>
             <p className="small">Publication requires existing status, a reviewed source and revision, a review date, and route access coordinates. Physical anchor and heading are optional.</p>
+            <GateModelFields value={draft.model ?? null} onChange={(model) => setDraft((current) => ({...current, model}))} />
             <FootprintReview item={item} busy={busy} onStage={async (footprint, reason) => {
               const result = await run(
                 async () => {
@@ -1977,15 +1978,15 @@ function ContentEditor({ item, run, mutate, user, busy }) {
           </>
         )}
         {kind === "structure" && <StructureFields value={draft} onChange={setDraft} />}
-        {kind === "structure" && item.published && can(user.role, "publish") && (
+        {["structure", "site_access"].includes(kind) && item.published && can(user.role, "publish") && (
           <button type="button" disabled={busy} onClick={(event) => {
             const reason = event.currentTarget.form.elements.reason.value;
-            run(() => mutate(`/admin/content/${id}/unpublish`, { expectedVersion: version, reason }), "Structure unpublished; the draft and history remain available.");
-          }}>Unpublish structure</button>
+            run(() => mutate(`/admin/content/${id}/unpublish`, { expectedVersion: version, reason }), "Feature unpublished; the draft and history remain available.");
+          }}>{kind === "structure" ? "Unpublish structure" : "Unpublish visitor entrance"}</button>
         )}
         <div className="form-grid">
           {Object.entries(draft)
-            .filter(([key]) => key !== "footprint" && !(kind === "structure" && ["frame", "height", "model"].includes(key)))
+            .filter(([key]) => key !== "footprint" && !(kind === "structure" && ["frame", "height", "model"].includes(key)) && !(kind === "site_access" && key === "model"))
             .map(([key, value]) =>
               [
                 "entrance",

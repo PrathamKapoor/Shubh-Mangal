@@ -32,7 +32,7 @@ import {
 } from "./inventory.mjs";
 import { contentSchemas } from "./content.mjs";
 import { publicStructureSchema } from "../shared/structure.mjs";
-import { measuredStructureGeometry } from "../shared/measured-structure.mjs";
+import { measuredStructureGeometry, measuredGateGeometry } from "../shared/measured-structure.mjs";
 import { presentationPlacementValid } from "../shared/presentation.mjs";
 import {
   stageGeometry,
@@ -148,6 +148,27 @@ function assessModelBinding(data, layout) {
     })));
   if (!matches || data.footprint.holes.length || data.frame.pivot[1] !== 0)
     throw new HttpError(422, "Model footprint does not match the reviewed footprint and ground pivot");
+}
+
+function assessGateBinding(data, layout) {
+  if (!data.model) return;
+  if (!data.footprint || !data.physicalAnchor || data.headingDegrees == null || data.model.pivot[1] !== 0)
+    throw new HttpError(422, "A gate model requires a reviewed footprint, anchor, bearing and ground pivot");
+  const project = footprintProjector(layout);
+  const anchor = project([data.physicalAnchor.lon,data.physicalAnchor.lat]);
+  let gate;
+  try { gate = measuredGateGeometry({anchor,bearingDegrees:data.headingDegrees,
+    pivot:[data.model.pivot[0],data.model.pivot[2]],dimensions:data.model.dimensions,
+    height:data.model.height?.metres ?? null});
+  } catch { throw new HttpError(422,"Invalid gate dimensions"); }
+  const actual = data.footprint.outer.slice(0,-1).map(project);
+  const matches = actual.length === gate.footprint.length && actual.some((_,offset) =>
+    [1,-1].some((direction) => actual.every((point,index) => {
+      const expected = gate.footprint[(offset + direction * index + actual.length) % actual.length];
+      return Math.hypot(point[0]-expected[0],point[1]-expected[1]) <= 0.001;
+    })));
+  if (!matches || data.footprint.holes.length)
+    throw new HttpError(422,"Gate model footprint does not match the reviewed footprint");
 }
 
 // Call under the spatial write lock for mutations. The same checks on reads
@@ -441,9 +462,10 @@ export function createApp(
       } catch { /* Keep invalid or conflicting structures private. */ }
     }
     let siteAccessStatus = access ? "available" : "unavailable";
-    if (access?.footprint) {
+    if (access) {
       try {
-        await assessAccessFootprint(access.footprint, db, selectedLayout);
+        assessGateBinding(access, selectedLayout);
+        if (access.footprint) await assessAccessFootprint(access.footprint, db, selectedLayout);
       } catch {
         // Hide both gate and directions when the current parcel snapshot
         // cannot validate a previously published footprint. Keep the record
@@ -495,6 +517,12 @@ export function createApp(
                   routeAccess: item.published.routeAccess,
                   physicalAnchor: item.published.physicalAnchor,
                   ...(item.published.headingDegrees !== undefined ? { headingDegrees: item.published.headingDegrees } : {}),
+                  ...(item.published.model ? { model: {
+                    assetId: item.published.model.assetId, revision: item.published.model.revision,
+                    pivot: item.published.model.pivot,
+                    dimensions: (({width,depth,leftPostWidth,rightPostWidth}) => ({width,depth,leftPostWidth,rightPostWidth}))(item.published.model.dimensions),
+                    height: item.published.model.height ? {metres:item.published.model.height.metres} : null,
+                  } } : {}),
                   state: item.published.state,
                   source: item.published.source,
                   sourceRevision: item.published.sourceRevision,
@@ -1358,18 +1386,18 @@ export function createApp(
     const body = z.object({ expectedVersion: z.number().int().positive(), reason }).strict().parse(req.body);
     res.json(await idempotent(req, `content:${req.user.id}:${req.params.id}`, async (tx) => {
       const old = (await tx.query("SELECT * FROM content WHERE id=$1", [req.params.id])).rows[0];
-      if (!old || old.kind !== "structure")
-        throw new HttpError(404, "Structure not found");
+      if (!old || !["structure", "site_access"].includes(old.kind))
+        throw new HttpError(404, "Publishable feature not found");
       if (old.version !== body.expectedVersion)
         throw new HttpError(409, "Content changed; reload it");
       if (old.published === null)
-        throw new HttpError(409, "Structure is not published");
+        throw new HttpError(409, "Feature is not published");
       const updated = (await tx.query(
-        "UPDATE content SET published=NULL,version=version+1,updated_at=now() WHERE id=$1 AND kind='structure' AND version=$2 AND published IS NOT NULL RETURNING *",
+        "UPDATE content SET published=NULL,version=version+1,updated_at=now() WHERE id=$1 AND kind IN ('structure','site_access') AND version=$2 AND published IS NOT NULL RETURNING *",
         [req.params.id, body.expectedVersion],
       )).rows[0];
       if (!updated) throw new HttpError(409, "Content changed; reload it");
-      await audit(tx, req.user, "structure.unpublish", req.params.id, old, updated, body.reason);
+      await audit(tx, req.user, `${old.kind}.unpublish`, req.params.id, old, updated, body.reason);
       return updated;
     }));
   });
@@ -1393,13 +1421,6 @@ export function createApp(
       .strict()
       .parse(req.body);
     const data = contentSchemas[body.kind].parse(body.data);
-    if (body.kind === "site_access" && data.footprint) {
-      if (!body.publish)
-        throw new HttpError(
-          422,
-          "Use the footprint staging action to preserve published access",
-        );
-    }
     const reference = referenceFor(req.params.id);
     if (reference && body.kind !== "amenity")
       throw new HttpError(
@@ -1469,6 +1490,9 @@ export function createApp(
             throw new HttpError(409, "Content changed; reload it");
           if (old && old.kind !== body.kind)
             throw new HttpError(422, "Content kind cannot change");
+          if (body.kind === "site_access" && data.footprint && !body.publish &&
+              (!old || !(await tx.query("SELECT $1::jsonb = $2::jsonb AS same", [json(old.draft.footprint ?? null),json(data.footprint)])).rows[0].same))
+            throw new HttpError(422,"Use the footprint staging action to change the footprint");
           let structureAssessment;
           if (body.kind === "structure") {
             if (body.publish) assessModelBinding(data, selectedLayout);
@@ -1476,8 +1500,10 @@ export function createApp(
               throw new HttpError(422, "Save the structure draft before reviewing and publishing it");
             structureAssessment = await assessStructure(data, req.params.id, tx, selectedLayout);
           }
-          if (body.kind === "site_access" && data.footprint && body.publish)
-            await assessAccessFootprint(data.footprint, tx, selectedLayout);
+          if (body.kind === "site_access" && body.publish) {
+            assessGateBinding(data, selectedLayout);
+            if (data.footprint) await assessAccessFootprint(data.footprint, tx, selectedLayout);
+          }
           if (
             body.kind === "site_access" &&
             data.footprint &&
@@ -1541,7 +1567,7 @@ export function createApp(
                   json(data),
                   body.publish
                     ? json(data)
-                    : (body.kind === "presentation" || body.kind === "structure") && old.published
+                    : (body.kind === "presentation" || body.kind === "structure" || body.kind === "site_access") && old.published
                       ? json(old.published)
                       : null,
                   req.params.id,

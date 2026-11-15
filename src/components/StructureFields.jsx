@@ -40,3 +40,22 @@ export default function StructureFields({ value, onChange }) {
     <p>Model axes: right, up, forward. World axes: east, up, south. Units: metres.</p>
   </section>;
 }
+
+// The route-access destination remains a separate field on the same entrance.
+export function GateModelFields({ value, onChange }) {
+  const number = (text) => text === "" ? null : Number(text);
+  const update = (patch) => onChange({...value,...patch});
+  return <section aria-label="Synthetic gate model evidence">
+    <label>Gate model<select value={value?.assetId ?? ""} onChange={(event) => onChange(event.target.value ? {assetId:"synthetic-gate",revision:"v1",pivot:[0,0,0],rights:"",correspondence:"",dimensions:{width:null,depth:null,leftPostWidth:null,rightPostWidth:null,source:"",sourceRevision:""},height:null} : null)}><option value="">No gate model</option><option value="synthetic-gate">Synthetic asymmetric gate v1</option></select></label>
+    {value && <>
+      <p>Illustrative synthetic model: its opening is between unequal posts. The physical anchor and bearing are set on this entrance; the route destination is separate.</p>
+      <label>Gate model rights and source<input value={value.rights} onChange={(event)=>update({rights:event.target.value})}/></label>
+      <label>Gate model correspondence evidence<input value={value.correspondence} onChange={(event)=>update({correspondence:event.target.value})}/></label>
+      {["right","up","forward"].map((axis,index)=><label key={axis}>Gate model pivot {axis} (m)<input type="number" step="any" value={value.pivot[index] ?? ""} onChange={(event)=>update({pivot:value.pivot.map((v,i)=>i===index?number(event.target.value):v)})}/></label>)}
+      {[["width","Gate width (m)"],["depth","Gate depth (m)"],["leftPostWidth","Left gatepost width (m)"],["rightPostWidth","Right gatepost width (m)"]].map(([key,label])=><label key={key}>{label}<input type="number" min="0" step="any" value={value.dimensions[key] ?? ""} onChange={(event)=>update({dimensions:{...value.dimensions,[key]:number(event.target.value)}})}/></label>)}
+      {[["source","Gate dimensions source"],["sourceRevision","Gate dimensions source revision"]].map(([key,label])=><label key={key}>{label}<input value={value.dimensions[key]} onChange={(event)=>update({dimensions:{...value.dimensions,[key]:event.target.value}})}/></label>)}
+      <label>Gate measured height (m, optional)<input type="number" min="0" step="any" value={value.height?.metres ?? ""} onChange={(event)=>update({height:event.target.value === "" ? null : {metres:number(event.target.value),source:value.height?.source || "",sourceRevision:value.height?.sourceRevision || ""}})}/></label>
+      {value.height && <>{[["source","Gate height source"],["sourceRevision","Gate height source revision"]].map(([key,label])=><label key={key}>{label}<input value={value.height[key]} onChange={(event)=>update({height:{...value.height,[key]:event.target.value}})}/></label>)}</>}
+    </>}
+  </section>;
+}

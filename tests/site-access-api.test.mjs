@@ -6,6 +6,7 @@ import { openDatabase, migrate } from "../server/db.mjs";
 import { createUser } from "../server/auth.mjs";
 import { createApp } from "../server/app.mjs";
 import sourceLayout from "../public/data/layout.json" with { type: "json" };
+import { planToGeographic } from "../shared/geography.mjs";
 
 const origin = "http://localhost:5173";
 const password = "Synthetic-site-access-test-927156!";
@@ -88,6 +89,11 @@ function put(
     .set("X-CSRF-Token", clients[role].csrf)
     .set("Idempotency-Key", randomUUID())
     .send({ kind, data, expectedVersion: version, publish, reason });
+}
+function unpublish(role, version) {
+  return clients[role].agent.post(`/api/admin/content/${id}/unpublish`)
+    .set("Origin", origin).set("X-CSRF-Token", clients[role].csrf).set("Idempotency-Key", randomUUID())
+    .send({ expectedVersion: version, reason: "Synthetic visitor access API review" });
 }
 function expectStatus(response, status) {
   assert.equal(response.status, status, JSON.stringify(response.body));
@@ -285,15 +291,17 @@ test("versioned updates, editor draft edits and explicit unpublish clear public 
   const drafted = await put("content_editor", pending, { version: 2 });
   expectStatus(drafted, 200);
   assert.equal(drafted.body.version, 3);
-  assert.equal(drafted.body.published, null);
-  assert.deepEqual((await project()).items, []);
+  assert.deepEqual(drafted.body.published, changed);
+  assert.deepEqual((await project()).items, [{id,kind:"site_access",published:changed}]);
   const republished = await put("owner", changed, {
     publish: true,
     version: 3,
   });
   expectStatus(republished, 200);
   assert.equal(republished.body.version, 4);
-  const unpublished = await put("owner", changed, { version: 4 });
+  expectStatus(await unpublish("content_editor", 4), 403);
+  expectStatus(await unpublish("owner", 3), 409);
+  const unpublished = await unpublish("owner", 4);
   expectStatus(unpublished, 200);
   assert.equal(unpublished.body.version, 5);
   assert.equal((await record()).published, null);
@@ -308,7 +316,7 @@ test("versioned updates, editor draft edits and explicit unpublish clear public 
     .sort((a, b) => a.new_value.version - b.new_value.version);
   assert.equal(entries.length, 5);
   for (const [index, entry] of entries.entries()) {
-    assert.equal(entry.action, "content.update");
+    assert.equal(entry.action, index === 4 ? "site_access.unpublish" : "content.update");
     assert.equal(
       entry.actor_id,
       clients[index === 2 ? "content_editor" : "owner"].id,
@@ -320,7 +328,7 @@ test("versioned updates, editor draft edits and explicit unpublish clear public 
   assert.deepEqual(entries[0].new_value.published, reviewed);
   assert.deepEqual(entries[1].old_value.published, reviewed);
   assert.deepEqual(entries[1].new_value.published, changed);
-  assert.equal(entries[2].new_value.published, null);
+  assert.deepEqual(entries[2].new_value.published, changed);
   assert.deepEqual(entries[4].old_value.published, changed);
   assert.equal(entries[4].new_value.published, null);
   await assert.rejects(
@@ -359,6 +367,7 @@ test("visitor entrance lifecycle preserves original project entrance evidence an
     200,
   );
   expectStatus(await put("owner", pending, { version: 2 }), 200);
+  expectStatus(await unpublish("owner", 3), 200);
   assert.deepEqual(
     (await db.query("SELECT * FROM content WHERE id='project'")).rows[0],
     original,
@@ -550,4 +559,36 @@ test("synthetic footprint is staged privately and only a saved draft can be publ
         entry.new_value.version === 2,
     ),
   );
+});
+
+
+test("synthetic gate binding preserves the published access while a sourced model draft is reviewed", async () => {
+  await insertPublished(reviewed);
+  const geo = (x,y) => {const p=planToGeographic({x,y},sourceLayout); return [p.lon,p.lat];};
+  const b = { ...reviewed, routeAccess:planToGeographic({x:104,y:107},sourceLayout),
+    physicalAnchor:planToGeographic({x:100,y:108},sourceLayout), headingDegrees:0,
+    footprint:{datum:"WGS84",source:"Synthetic gate survey",sourceRevision:"gate-1",outer:[[100,108],[108,108],[108,106],[100,106],[100,108]].map(([x,y])=>geo(x,y)),holes:[],interactions:[]},
+    model:{assetId:"synthetic-gate",revision:"v1",pivot:[0,0,0],rights:"Synthetic fixture",correspondence:"Synthetic gate footprint",dimensions:{width:8,depth:2,leftPostWidth:1,rightPostWidth:2,source:"Synthetic dimensions",sourceRevision:"gate-dim-1"},height:{metres:3,source:"Synthetic height",sourceRevision:"gate-height-1"}} };
+  const staged = await clients.content_editor.agent.put(`/api/admin/content/${id}/footprint`)
+    .set("Origin",origin).set("X-CSRF-Token",clients.content_editor.csrf).set("Idempotency-Key",randomUUID())
+    .send({footprint:b.footprint,expectedVersion:1,reason:"Synthetic gate staging"});
+  expectStatus(staged,200);
+  const saved=await put("content_editor",b,{version:2}); expectStatus(saved,200);
+  assert.deepEqual((await record()).published,reviewed);
+  assert.deepEqual((await project()).items[0].published,reviewed);
+  expectStatus(await put("content_editor",b,{version:3,publish:true}),403);
+  expectStatus(await put("owner",b,{version:2,publish:true}),409);
+  expectStatus(await put("owner",b,{version:3,publish:true}),200);
+  const publicGate=(await project()).items[0].published;
+  assert.equal(publicGate.model.assetId,"synthetic-gate");
+  assert.equal(publicGate.model.dimensions.width,8);
+  assert.doesNotMatch(JSON.stringify(publicGate.model),/Synthetic dimensions|Synthetic gate footprint|Synthetic fixture/);
+  assert.equal(publicGate.routeAccess.lon,b.routeAccess.lon);
+  const changed=structuredClone(b); changed.model.dimensions.width=7;
+  expectStatus(await put("owner",changed,{version:4}),200);
+  expectStatus(await put("owner",changed,{version:5,publish:true}),422);
+  assert.deepEqual((await record()).published,b);
+  expectStatus(await unpublish("owner",5),200);
+  assert.equal((await project()).items.some((item)=>item.id===id),false);
+  assert.equal((await record()).draft.model.dimensions.width,7);
 });

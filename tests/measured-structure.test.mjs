@@ -181,3 +181,28 @@ test("procedural building front is visibly placed on its forward edge at the rev
   near(geometry.boundingBox.min.z,0); near(geometry.boundingBox.max.z,0);
   geometry.dispose();
 });
+
+
+test("synthetic gate has two unequal front posts and a measured opening under clockwise bearing", async () => {
+  const mod=await import("../shared/measured-structure.mjs");
+  assert.equal(typeof mod.measuredGateGeometry,"function");
+  const gate=mod.measuredGateGeometry({anchor:[100,200],bearingDegrees:90,pivot:[1,0],dimensions:{width:8,depth:2,leftPostWidth:1,rightPostWidth:2},height:3});
+  close(gate.footprint,[[100,199],[100,207],[102,207],[102,199]]);
+  assert.equal(gate.openingWidth,5);
+  assert.equal(gate.posts.length,2);
+  close(gate.posts[0].slice(0,2),[[100,199],[100,200]]);
+});
+
+
+test("published visitor gate projects the physical anchor and keeps its route destination separate", async () => {
+  const mod=await import("../shared/measured-structure.mjs");
+  assert.equal(typeof mod.preparePublicGate,"function");
+  const access={title:"Synthetic gate",routeAccess:planToGeographic({x:40,y:40},layout),
+    physicalAnchor:planToGeographic({x:20,y:20},layout),headingDegrees:90,state:"existing",source:"Synthetic evidence",sourceRevision:"1",verifiedAt:"2026-01-01T00:00:00Z",customerVisible:true,
+    footprint:{outer:[[20,20],[20,28],[22,28],[22,20],[20,20]].map(geo),holes:[]},
+    model:{assetId:"synthetic-gate",revision:"v1",pivot:[0,0,0],dimensions:{width:8,depth:2,leftPostWidth:1,rightPostWidth:2},height:{metres:3}}};
+  const gate=mod.preparePublicGate(access,layout);
+  assert.ok(gate); assert.equal(gate.openingWidth,5); assert.equal(gate.height,3);
+  gate.footprint.forEach((p,i)=>p.forEach((v,j)=>near(v,[[20,20],[20,28],[22,28],[22,20]][i][j])));
+  assert.notDeepEqual(access.physicalAnchor,access.routeAccess);
+});

@@ -166,7 +166,9 @@ export default function MapCanvas({
     [accessSelected, setAccessSelected] = useState(false),
     [selectedStructure, setSelectedStructure] = useState(null),
     [planImageStatus, setPlanImageStatus] = useState("loading");
-  useEffect(() => { setSelectedStructure(null); }, [selected, activeAmenity, selectedBlock]);
+  useEffect(() => { setSelectedStructure(null); setAccessSelected(false); }, [selected, activeAmenity, selectedBlock]);
+  useEffect(() => { if (selectedStructure) setAccessSelected(false); }, [selectedStructure]);
+  useEffect(() => { if (accessSelected) setSelectedStructure(null); }, [accessSelected]);
   const accessPath = useMemo(() => {
     const footprint = visitorAccess?.footprint;
     if (!footprint) return null;
@@ -915,7 +917,7 @@ export default function MapCanvas({
           <button type="button" onClick={() => setAccessSelected(!accessSelected)} aria-expanded={accessSelected}>
             {hi ? "समीक्षित प्रवेश स्थल" : "Reviewed visitor entrance"}
           </button>
-          {accessSelected && <p>{visitorAccess.title} · {hi ? "प्रकाशित भौतिक सीमा; रास्ते का बिंदु अलग हो सकता है।" : "Published physical footprint; the route-access point may differ."}</p>}
+          {accessSelected && <p>{visitorAccess.title} · {hi ? "प्रकाशित भौतिक सीमा; रास्ते का बिंदु अलग हो सकता है।" : "Published physical footprint; the route-access point may differ."} {visitorAccess.model && (hi ? "सिंथेटिक गेट मॉडल केवल चित्रण है।" : "Synthetic gate model is illustrative.")}</p>}
         </div>
       )}
       {structurePaths.length > 0 && ["plan", "google", "3d"].includes(mapMode) && (
@@ -2082,6 +2084,7 @@ export default function MapCanvas({
                   onAccessSelect={() => setAccessSelected(true)}
                   structures={structures}
                   selectedStructure={selectedStructure}
+                  accessSelected={accessSelected}
                   onExit={() => setMapMode("colony")}
                   hindi={hi}
                 />

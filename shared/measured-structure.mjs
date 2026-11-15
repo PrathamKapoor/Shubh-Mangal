@@ -26,11 +26,32 @@ export function measuredStructureGeometry({ anchor, bearingDegrees, pivot, dimen
   return { footprint, height };
 }
 
+// Procedural gate: right/forward metres, unequal post widths and an open centre.
+export function measuredGateGeometry({ anchor, bearingDegrees, pivot, dimensions, height } = {}) {
+  const pair = (value) => Array.isArray(value) && value.length === 2 && value.every(Number.isFinite);
+  const { width, depth, leftPostWidth, rightPostWidth } = dimensions || {};
+  if (!pair(anchor) || !pair(pivot) || !Number.isFinite(bearingDegrees) ||
+      ![width, depth, leftPostWidth, rightPostWidth].every(Number.isFinite) ||
+      width <= 0 || depth <= 0 || leftPostWidth <= 0 || rightPostWidth <= 0 ||
+      leftPostWidth + rightPostWidth >= width ||
+      (height !== null && (!Number.isFinite(height) || height <= 0)))
+    throw new TypeError("Invalid gate measurements");
+  const angle = bearingDegrees * Math.PI / 180, cos = Math.cos(angle), sin = Math.sin(angle);
+  const at = ([right, forward]) => {
+    const x = right - pivot[0], f = forward - pivot[1];
+    return [anchor[0] + x*cos + f*sin, anchor[1] + x*sin - f*cos];
+  };
+  const rectangle = (left, right) => [[left,0],[right,0],[right,depth],[left,depth]].map(at);
+  return { footprint: rectangle(0,width), posts: [rectangle(0,leftPostWidth), rectangle(width-rightPostWidth,width)],
+    openingWidth: width-leftPostWidth-rightPostWidth, height };
+}
+
 // Public records are accepted only in the {id, kind, published} envelope.
 // The supplied footprint already defines placement; frame metadata is checked
 // but does not rotate or resize it, and model metadata never loads an asset.
 import * as THREE from "three";
 import { publicStructureSchema } from "./structure.mjs";
+import { reviewedVisitorAccess } from "./site-access.mjs";
 import { geographicToPlan } from "./geography.mjs";
 import { createFootprint3D } from "./footprint3d.mjs";
 
@@ -61,6 +82,19 @@ export function preparePublicStructure(record, layout) {
   } catch {
     return null;
   }
+}
+
+// Accept only the public reviewed visitor-entrance shape; routeAccess is never used for model placement.
+export function preparePublicGate(access, layout) {
+  if (!access?.model || !access?.physicalAnchor || access.headingDegrees == null ||
+      !reviewedVisitorAccess([{id:"visitor-entrance",kind:"site_access",published:access}])) return null;
+  try {
+    const anchor = geographicToPlan(access.physicalAnchor, layout, {enforceBounds:true});
+    if (!createFootprint3D(access,layout) || access.model.pivot[1] !== 0) return null;
+    return measuredGateGeometry({anchor:[anchor.x,anchor.y],bearingDegrees:access.headingDegrees,
+      pivot:[access.model.pivot[0],access.model.pivot[2]],dimensions:access.model.dimensions,
+      height:access.model.height?.metres ?? null});
+  } catch { return null; }
 }
 
 // Geometry is built in XY with extrusion along local +Z. The component rotates

@@ -53,6 +53,24 @@ export const siteAccessFootprintSchema = z
   })
   .strict();
 
+const gateDimensions = z.object({
+  width: z.number().positive().finite(), depth: z.number().positive().finite(),
+  leftPostWidth: z.number().positive().finite(), rightPostWidth: z.number().positive().finite(),
+  source: text.min(5), sourceRevision: text.min(1),
+}).strict();
+const gateModel = z.object({
+  assetId: z.literal("synthetic-gate"), revision: z.literal("v1"),
+  pivot: z.tuple([z.number().finite(),z.number().finite(),z.number().finite()]),
+  rights: text.min(1), correspondence: text.min(1), dimensions: gateDimensions,
+  height: z.object({metres:z.number().positive().finite(),source:text.min(5),sourceRevision:text.min(1)}).strict().nullable(),
+}).strict();
+const publicGateModel = z.object({
+  assetId: z.literal("synthetic-gate"), revision: z.literal("v1"),
+  pivot: z.tuple([z.number().finite(),z.number().finite(),z.number().finite()]),
+  dimensions: gateDimensions.omit({source:true,sourceRevision:true}),
+  height: z.object({metres:z.number().positive().finite()}).strict().nullable(),
+}).strict();
+
 // Shared validation keeps publication consumers and the content schema aligned.
 // Null coordinates/date allow private drafts, not a usable visitor entrance.
 export const siteAccessSchema = z
@@ -62,6 +80,7 @@ export const siteAccessSchema = z
     physicalAnchor: point.nullable(),
     headingDegrees: z.number().min(0).lt(360).nullable().optional(),
     footprint: siteAccessFootprintSchema.optional(),
+    model: gateModel.nullable().optional(),
     state: z.enum([
       "confirmation_pending",
       "planned",
@@ -79,6 +98,7 @@ export const siteAccessSchema = z
 // private publication contract above continues to require those fields.
 const publicAccessSchema = siteAccessSchema.extend({
   footprint: z.object({ outer: ring, holes: z.array(ring).max(8) }).strict().optional(),
+  model: publicGateModel.nullable().optional(),
 });
 
 // Returns the published payload, never a draft or legacy entrance fallback.
