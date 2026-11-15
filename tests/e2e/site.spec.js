@@ -86,20 +86,11 @@ test("comparison identifies selections missing from current published data", asy
       JSON.stringify(["plot-1-b26-cell-26"]),
     ),
   );
-  await page.route("**/api/public/project", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ mode: "connected", items: [] }),
-    }),
-  );
-  await page.route("**/api/public/plots?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ plots: [], total: 0 }),
-    }),
-  );
+  await page.route("**/api/public/snapshot", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    await route.fulfill({response,json:{...snapshot,project:{...snapshot.project,mode:"connected",items:[]},plots:[]}});
+  });
   await page.goto("/compare");
   await expect(
     page.getByText("Some selections are not in the current data.", {
@@ -343,7 +334,7 @@ test("contact waits for the connection check before offering a submission", asyn
   const pending = new Promise((resolve) => {
     release = resolve;
   });
-  await page.route("**/api/public/project", async (route) => {
+  await page.route("**/api/public/snapshot", async (route) => {
     await pending;
     await route.continue();
   });
@@ -396,7 +387,7 @@ test("a stalled connection becomes an explicitly unsent offline draft", async ({
   const pending = new Promise((resolve) => {
     release = resolve;
   });
-  await page.route("**/api/public/project", async (route) => {
+  await page.route("**/api/public/snapshot", async (route) => {
     await pending;
     await route.abort().catch(() => {});
   });
@@ -440,14 +431,11 @@ test("a failed refresh keeps previously loaded published mode and marks it stale
   page,
 }) => {
   let calls = 0;
-  await page.route("**/api/public/project", async (route) => {
-    if (calls++ === 0)
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ mode: "connected", items: [] }),
-      });
-    else await route.abort();
+  await page.route("**/api/public/snapshot", async (route) => {
+    if (calls++ === 0) {
+      const response = await route.fetch(); const snapshot = await response.json();
+      await route.fulfill({response,json:{...snapshot,project:{...snapshot.project,mode:"connected",items:[]},plots:[]}});
+    } else await route.abort();
   });
   await page.goto("/explore", { waitUntil: "networkidle" });
   await expect(
@@ -1254,13 +1242,10 @@ for (const ref of ownerAmenityReferences.filter(
     await expect(page.locator(".map-amenity-card")).toContainText(ref.title);
     await page.getByRole("button", { name: "Back to full map" }).click();
     expect(images.some((url) => url.endsWith("/fountain.png"))).toBeFalsy();
-    await page.route("**/api/public/project", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ mode: "connected", items: [] }),
-      }),
-    );
+    await page.route("**/api/public/snapshot", async (route) => {
+      const response = await route.fetch(); const snapshot = await response.json();
+      await route.fulfill({response,json:{...snapshot,project:{...snapshot.project,mode:"connected",items:[]},plots:[]}});
+    });
     await page.reload();
     await expect(page.locator(".amenity-marker")).toHaveCount(0);
   });
@@ -1351,13 +1336,10 @@ test("the shared visual respects individual publication, surveyed locations and 
       },
     }));
   let items = records;
-  await page.route("**/api/public/project", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ mode: "connected", items }),
-    }),
-  );
+  await page.route("**/api/public/snapshot", async (route) => {
+    const response = await route.fetch(); const snapshot = await response.json();
+    await route.fulfill({response,json:{...snapshot,project:{...snapshot.project,mode:"connected",items}}});
+  });
   await page.goto("/explore");
   await expect(page.locator("[data-shared-amenity-art]")).toHaveCount(1);
   await expect(

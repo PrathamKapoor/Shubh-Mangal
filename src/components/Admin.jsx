@@ -310,7 +310,7 @@ function Pager({ offset, total, limit = 50, onChange }) {
     </nav>
   );
 }
-export default function Admin() {
+export default function Admin({ siteConfig, sourceAssets = {}, legacySource = false }) {
   const [user, setUser] = useState(null),
     [checking, setChecking] = useState(true),
     [tab, setTab] = useState("inventory"),
@@ -506,7 +506,7 @@ export default function Admin() {
     <>
       <div className="admin-header">
         <div>
-          <span className="eyebrow">SHUBH MANGAL · OWNER WORKSPACE</span>
+          <span className="eyebrow">{siteConfig?.name} · OWNER WORKSPACE</span>
           <h1>Good to see you, {user.name}.</h1>
           <p>
             Role: {user.role}. Draft, reviewed and published records remain
@@ -583,9 +583,8 @@ export default function Admin() {
             </span>
           </div>
           <p>
-            All 556 source cells require review, including the 32 missing or
-            duplicate-label cases. The PDF governs only after owner review. A
-            unique label match is not approval.
+            All source cells require review. Source evidence governs only after owner review.
+            A unique label match is not approval.
           </p>
           <label>
             Find a draft cell
@@ -646,16 +645,16 @@ export default function Admin() {
                         </text>
                       ))}
                     </svg>
-                    <a
-                      href="/assets/survey-plan-north.png"
+                    {sourceAssets.surveyPlan && <a
+                      href={sourceAssets.surveyPlan}
                       target="_blank"
                       rel="noreferrer"
                     >
                       <img
-                        src="/assets/survey-plan-north.png"
+                        src={sourceAssets.surveyPlan}
                         alt="Reference PDF plan — open full resolution"
                       />
-                    </a>
+                    </a>}
                   </div>
                   <p className="warning">
                     Candidates: {cell.data.labelCandidates.join(", ") || "None"}
@@ -671,7 +670,7 @@ export default function Admin() {
                     <EvidenceEditor
                       key={cell.id}
                       busy={busy}
-                      initial={blankEvidence()}
+                      initial={{ ...blankEvidence(), sourceDocument: legacySource ? "Supplied north-oriented PDF" : "" }}
                       onSubmit={(v) =>
                         run(
                           () =>
@@ -686,7 +685,7 @@ export default function Admin() {
                   )}
                 </>
               ) : (
-                <p>Select a cell to inspect it beside the PDF.</p>
+                <p>Select a cell to inspect its source geometry.</p>
               )}
             </div>
           </div>
@@ -1485,7 +1484,7 @@ export default function Admin() {
             verified content. Images remain private until published; use only
             media you have permission to share.
           </p>
-          <div className="note">
+          {legacySource && <div className="note">
             <p>
               The supplied concept locations, the shared temple/garden visual,
               and the four separately adjustable roundabout gardens can be
@@ -1507,7 +1506,7 @@ export default function Admin() {
             >
               Stage owner-indicated amenities
             </button>
-          </div>
+          </div>}
           {(data.items || [])
             .filter((item) => item.kind !== "presentation")
             .map((item) => (
@@ -1836,7 +1835,7 @@ function ContentEditor({ item, run, mutate, user, busy }) {
       customerVisible: false,
     },
     setting: {
-      name: "Shubh Mangal Residency",
+      name: "",
       tagline: "",
       contactPhone: "",
       contactEmail: "",

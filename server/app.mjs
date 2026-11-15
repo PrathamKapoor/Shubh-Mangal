@@ -48,6 +48,7 @@ import {
 } from "../shared/owner-amenity-references.mjs";
 import { stageImage, mediaFile } from "./media.mjs";
 import { publicGeometry } from "./public-geometry.mjs";
+import { loadPublicSnapshot } from "./public-snapshot.mjs";
 import {
   reviewedVisitorAccess,
   siteAccessFootprintSchema,
@@ -227,6 +228,9 @@ export function createApp(
       : { name: process.env.SITE_NAME },
     sourceLayout: selectedLayout = sourceLayout,
     sourceBundle = selectedLayout === sourceLayout ? "public/data/layout.json" : null,
+    sourceIdentity = null,
+    staticDirectory = "dist",
+    sourceAssets = sourceBundle === "public/data/layout.json" ? { schematic: "/assets/geographic-layout.svg", surveyPlan: "/assets/survey-plan-north.png", poster: "/assets/colony-poster.png", surveyPdf: "/downloads/survey-plan-north.pdf", kml: "/downloads/Shubh_Mangal_Full_Layout.kml" } : { schematic: null, surveyPlan: null, poster: null, surveyPdf: null, kml: null },
   } = {},
 ) {
   const publicSiteConfig = createSiteConfig(siteConfig);
@@ -444,7 +448,7 @@ export function createApp(
       annotations: [],
     });
   });
-  app.get("/api/public/project", async (req, res) => {
+  async function publicProject(db) {
     const items = (
       await db.query(
         "SELECT id,kind,published FROM content WHERE published IS NOT NULL",
@@ -482,12 +486,15 @@ export function createApp(
           ).rows.map((row) => [row.id, row.draft_id]),
         )
       : new Map();
-    res.json({
+    return {
       mode: demo ? "local-demo" : "connected",
       geographicBounds: selectedLayout.geographicBounds,
       legacyReferenceAvailable: demo && sourceBundle === "public/data/layout.json",
+      legacySource: sourceBundle === "public/data/layout.json",
+      sourceIdentity,
       siteAccessStatus,
       siteConfig: publicSiteConfig,
+      sourceAssets,
       items: items
         .filter(
           (item) =>
@@ -555,8 +562,10 @@ export function createApp(
                 }
               : item,
         ),
-    });
-  });
+    };
+  }
+  app.get("/api/public/project", async (_req, res) => res.json(await publicProject(db)));
+  app.get("/api/public/snapshot", async (_req, res) => res.json(await loadPublicSnapshot(db, selectedLayout, publicProject)));
   app.get("/api/public/media/:name", async (req, res, next) => {
     const path = mediaFile(mediaDirectory, req.params.name);
     const url = `/api/public/media/${req.params.name}`;
@@ -1266,6 +1275,7 @@ export function createApp(
     "/api/admin/amenity-references/stage",
     auth("content"),
     async (req, res) => {
+      if (sourceBundle !== "public/data/layout.json") throw new HttpError(404, "Reference set unavailable");
       const input = z.object({ reason }).strict().parse(req.body);
       res.json(
         await idempotent(
@@ -1421,7 +1431,7 @@ export function createApp(
       .strict()
       .parse(req.body);
     const data = contentSchemas[body.kind].parse(body.data);
-    const reference = referenceFor(req.params.id);
+    const reference = sourceBundle === "public/data/layout.json" ? referenceFor(req.params.id) : null;
     if (reference && body.kind !== "amenity")
       throw new HttpError(
         422,
@@ -1695,7 +1705,7 @@ export function createApp(
         const data = approvedDataSchema.parse({
           number: r.approvedPlotNumber,
           block: r.approvedBlock,
-          sourceDocument: "Supplied north-oriented PDF",
+          sourceDocument: sourceBundle === "public/data/layout.json" ? "Supplied north-oriented PDF" : r.sourceDocument,
           sourceRevision: r.surveyDocumentRevision,
           reviewNote: r.notes,
           areaSqM: r.verifiedAreaSqFt
@@ -2179,9 +2189,9 @@ export function createApp(
     res.status(404).json({ error: "API endpoint not found" }),
   );
   if (serveStatic) {
-    app.use(express.static(resolve("dist"), { index: false, maxAge: "1h" }));
+    app.use(express.static(resolve(staticDirectory), { index: false, maxAge: "1h" }));
     app.get("/{*path}", async (req, res) => {
-      let html = await readFile(resolve("dist/index.html"), "utf8");
+      let html = await readFile(resolve(staticDirectory, "index.html"), "utf8");
       if (googleMaps)
         html = html.replace(
           /<script\b/g,
@@ -2199,10 +2209,12 @@ export function createApp(
               "'": "&#39;",
             })[c],
         );
-      html = html.replace(
-        'content="/assets/geographic-layout.png"',
-        `content="${escape(origin)}/assets/geographic-layout.png"`,
-      );
+      const siteTitle = `${publicSiteConfig.name} · A thoughtful beginning`;
+      html = html
+        .replace(/<title>[^<]*<\/title>/, `<title>${escape(siteTitle)}</title>`)
+        .replace(/property="og:title"\s+content="[^"]*"/, `property="og:title" content="${escape(siteTitle)}"`);
+      if (sourceAssets.schematic)
+        html = html.replace("</head>", `<meta property="og:image" content="${escape(origin + sourceAssets.schematic)}" /></head>`);
       if (req.path.startsWith("/plots/")) {
         const id = req.path.slice(7),
           p = uuid.safeParse(id).success ? await getPlot(db, id) : null;

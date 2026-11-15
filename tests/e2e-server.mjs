@@ -2,6 +2,8 @@ import { openDatabase, migrate } from "../server/db.mjs";
 import { seed } from "../server/seed.mjs";
 import { createUser } from "../server/auth.mjs";
 import { createApp } from "../server/app.mjs";
+import { loadSiteSource } from "../server/site-source.mjs";
+import { buildIdentity } from "../server/site-build.mjs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +28,7 @@ const server = createApp(db, {
   logging: false,
   demo: true,
   mediaDirectory,
+  sourceIdentity: buildIdentity(await loadSiteSource()).digest,
 }).listen(3002, "127.0.0.1");
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () =>

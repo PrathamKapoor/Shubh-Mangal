@@ -19,14 +19,11 @@ const syntheticPlots = statuses.map((status, index) => ({
   publication: "published",
 }));
 async function fixtures(page) {
-  await page.route("**/api/public/project", (route) =>
-    route.fulfill({ json: { mode: "connected", items: [] } }),
-  );
-  await page.route("**/api/public/plots?**", (route) =>
-    route.fulfill({
-      json: { plots: syntheticPlots, total: syntheticPlots.length },
-    }),
-  );
+  await page.route("**/api/public/snapshot", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    await route.fulfill({response,json:{...snapshot,project:{...snapshot.project,mode:"connected",items:[]},plots:syntheticPlots}});
+  });
 }
 async function dominantCenterPixel(page) {
   const image = await page.locator(".colony-three-canvas canvas").screenshot();

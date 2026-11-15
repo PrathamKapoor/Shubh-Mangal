@@ -1,10 +1,11 @@
 import { test, expect } from "@playwright/test";
 
 test("an entrance awaiting revalidation explains why gate directions are unavailable", async ({ page }) => {
-  await page.route("**/api/public/project", async (route) => {
+  await page.route("**/api/public/snapshot", async (route) => {
     const response = await route.fetch();
-    const project = await response.json();
-    await route.fulfill({ response, json: { ...project, siteAccessStatus: "needs_review", items: project.items.filter((item) => item.kind !== "site_access") } });
+    const snapshot = await response.json();
+    const project = snapshot.project;
+    await route.fulfill({ response, json: { ...snapshot, project: { ...project, siteAccessStatus: "needs_review", items: project.items.filter((item) => item.kind !== "site_access") } } });
   });
   await page.goto("/explore");
   await expect(page.getByRole("status").filter({ hasText: "entrance footprint needs another review" })).toBeVisible();

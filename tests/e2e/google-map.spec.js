@@ -29,7 +29,7 @@ const official = {
   geometry,
 };
 // This adapter replaces only Google's network boundary. The actual component,
-// React lifecycle, matching, fetch, filtering and event handlers run unchanged.
+// React lifecycle, matching, supplied snapshots, filtering and event handlers run unchanged.
 const adapter = `(() => {
   const state = window.mapAdapter = {fits:0, pans:0, circles:[], features:[], layers:[], type:'roadmap'};
   class Circle {
@@ -67,9 +67,6 @@ async function mount(
       ? route.abort()
       : route.fulfill({ contentType: "application/javascript", body: script }),
   );
-  await page.route("**/api/public/geometry", (route) =>
-    route.fulfill({ json: payload }),
-  );
   await page.route("**/__google-map-fixture", (route) =>
     route.fulfill({
       contentType: "text/html",
@@ -80,7 +77,7 @@ async function mount(
     const createRoot=ReactDOM.createRoot;
     const layout=await (await fetch('/data/layout.json')).json();
     const root=createRoot(document.getElementById('root'));
-    const props={data:layout,plots:[{id:'official',geometryId:'cell',version:2,approved:{},status:'available'},{id:'raw',path:'M100,100 L120,100 L120,120 L100,120 Z M105,105 L110,105 L110,110 L105,110 Z',status:'unverified'}],selected:'official',visibleIds:new Set(['official','raw']),onSelect:id=>window.chosen=id,onExit:()=>window.exited=true};
+    const props={data:layout,publicGeometry:${JSON.stringify(payload)},plots:[{id:'official',geometryId:'cell',version:2,approved:{},status:'available'},{id:'raw',path:'M100,100 L120,100 L120,120 L100,120 Z M105,105 L110,105 L110,110 L105,110 Z',status:'unverified'}],selected:'official',visibleIds:new Set(['official','raw']),onSelect:id=>window.chosen=id,onExit:()=>window.exited=true};
     window.renderMap=updates=>root.render(React.createElement(GoogleMapView,{...props,...updates}));
     window.unmountMap=()=>root.unmount();window.renderMap({});
   </script>`,
@@ -189,6 +186,31 @@ test("published structure footprint is selectable on the controlled Google layer
   expect(await page.evaluate(() => window.structureChosen)).toBe("synthetic-building");
 });
 
+test("delayed snapshot and stale state never mix gate, structures and plot boundaries; recovery uses supplied geometry", async ({ page }) => {
+  test.skip(!providerEnabled, "Requires separate controlled-key environment.");
+  let geometryRequests = 0;
+  page.on("request", (request) => { if (new URL(request.url()).pathname === "/api/public/geometry") geometryRequests++; });
+  await mount(page, { payload: null });
+  await expect(page.getByText("Loading published boundaries…")).toBeVisible();
+  await page.evaluate(() => {
+    window.snapshotProps = {
+      visitorAccess: { title: "Entrance", routeAccess: { lat: 24.466, lon: 74.908 }, physicalAnchor: null, footprint: { outer: [[74.908,24.466],[74.9081,24.466],[74.908,24.4661],[74.908,24.466]], holes: [] } },
+      structures: [{ id: "building", kind: "structure", published: { footprint: { outer: [[74.909,24.467],[74.90915,24.467],[74.909,24.4671],[74.909,24.467]], holes: [] } } }],
+    };
+    window.renderMap(window.snapshotProps);
+  });
+  await expect.poll(() => page.evaluate(() => window.mapAdapter.layers.flatMap(layer => layer.features.map(feature => feature.getId())))).toEqual([]);
+  await page.evaluate((payload) => { window.snapshotGeometry = payload; window.renderMap({ ...window.snapshotProps, publicGeometry: payload }); }, { type: "FeatureCollection", features: [official] });
+  await expect.poll(() => page.evaluate(() => window.mapAdapter.layers.flatMap(layer => layer.features.map(feature => feature.getId())).sort())).toEqual(["building", "official", "raw", "visitor-entrance", "visitor-entrance-anchor"]);
+  await page.evaluate(() => window.renderMap({ ...window.snapshotProps, publicGeometry: window.snapshotGeometry, stale: true }));
+  await expect.poll(() => page.evaluate(() => window.mapAdapter.layers.flatMap(layer => layer.features.map(feature => feature.getId())))).toEqual([]);
+  await expect(page.getByText(/Inventory may be out of date/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Directions to reviewed visitor access" })).toHaveCount(0);
+  await page.evaluate(() => window.renderMap({ ...window.snapshotProps, publicGeometry: window.snapshotGeometry, stale: false }));
+  await expect.poll(() => page.evaluate(() => window.mapAdapter.layers.flatMap(layer => layer.features.map(feature => feature.getId())).sort())).toEqual(["building", "official", "raw", "visitor-entrance", "visitor-entrance-anchor"]);
+  expect(geometryRequests).toBe(0);
+});
+
 test("visitor location is intentional, shows metre uncertainty and never enters app requests or storage", async ({
   page,
   context,
@@ -254,7 +276,7 @@ for (const [code, message] of [[1,"permission was denied"],[2,"unavailable"],[3,
     expect(await page.evaluate(()=>window.mapAdapter.circles.length)).toBe(0);
     expect(await page.evaluate(()=>window.mapAdapter.pans)).toBe(0);
   });
-test("refresh failure clears every overlay; focus recovers; mismatched official never becomes draft", async ({
+test("mismatched supplied official geometry never becomes draft", async ({
   page,
 }) => {
   test.skip(
@@ -265,27 +287,8 @@ test("refresh failure clears every overlay; focus recovers; mismatched official 
   await expect
     .poll(() => page.evaluate(() => window.mapAdapter?.features.length))
     .toBe(2);
-  await page.route("**/api/public/geometry", (route) =>
-    route.fulfill({ status: 503, json: { error: "offline" } }),
-  );
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(page.getByRole("alert")).toContainText(
-    "Boundaries are unavailable",
-  );
-  await expect
-    .poll(() => page.evaluate(() => window.mapAdapter.features))
-    .toEqual([]);
-  await page.route("**/api/public/geometry", (route) =>
-    route.fulfill({
-      json: {
-        type: "FeatureCollection",
-        features: [
-          { ...official, properties: { ...official.properties, version: 1 } },
-        ],
-      },
-    }),
-  );
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.evaluate((feature) => window.renderMap({ publicGeometry: { type: "FeatureCollection", features: [feature] } }),
+    { ...official, properties: { ...official.properties, version: 1 } });
   await expect
     .poll(() => page.evaluate(() => window.mapAdapter.features))
     .toEqual(["raw"]);
@@ -334,43 +337,29 @@ test("network error has retry and Hindi Plan fallback", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("stalled geometry refresh times out, clears overlays and recovers on focus", async ({
+test("invalid supplied geometry clears overlays and a valid snapshot recovers", async ({
   page,
 }) => {
   test.skip(!providerEnabled, "Requires separate controlled-key environment.");
-  await page.clock.install();
   await mount(page);
   await expect
     .poll(() => page.evaluate(() => window.mapAdapter?.features.length))
     .toBe(2);
-  let pending;
-  await page.route("**/api/public/geometry", (route) => {
-    pending = route;
-  });
-  const requested = page.waitForRequest("**/api/public/geometry");
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await requested;
-  await page.clock.fastForward(12001);
+  await page.evaluate(() => window.renderMap({ publicGeometry: { type: "invalid" } }));
   await expect(page.getByRole("alert")).toContainText(
     "Boundaries are unavailable",
   );
   await expect
     .poll(() => page.evaluate(() => window.mapAdapter.features))
     .toEqual([]);
-  await pending.abort().catch(() => {});
-  await page.route("**/api/public/geometry", (route) =>
-    route.fulfill({
-      json: { type: "FeatureCollection", features: [official] },
-    }),
-  );
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.evaluate((feature) => window.renderMap({ publicGeometry: { type: "FeatureCollection", features: [feature] } }), official);
   await expect
     .poll(() => page.evaluate(() => window.mapAdapter.features))
     .toEqual(["official", "raw"]);
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
-test("refreshes at sixty seconds without refitting, then stops polling on unmount", async ({
+test("focus and sixty seconds never poll geometry or refit the map", async ({
   page,
 }) => {
   test.skip(!providerEnabled, "Requires separate controlled-key environment.");
@@ -383,15 +372,14 @@ test("refreshes at sixty seconds without refitting, then stops polling on unmoun
   await expect
     .poll(() => page.evaluate(() => window.mapAdapter?.features.length))
     .toBe(2);
-  const initial = requests;
   await page.clock.fastForward(60001);
-  await expect.poll(() => requests).toBe(initial + 1);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  expect(requests).toBe(0);
   expect(await page.evaluate(() => window.mapAdapter.fits)).toBe(1);
   await page.evaluate(() => window.unmountMap());
-  const afterUnmount = requests;
   await page.clock.fastForward(120001);
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  expect(requests).toBe(afterUnmount);
+  expect(requests).toBe(0);
   expect(await page.evaluate(() => window.gm_authFailure)).toBeUndefined();
 });
 test("explorer Google fallback keeps the selected URL and local Plan usable", async ({

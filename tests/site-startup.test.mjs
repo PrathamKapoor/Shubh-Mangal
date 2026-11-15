@@ -128,19 +128,20 @@ test("alternate startup rejects unseeded and ambiguous unmarked revisions", asyn
   }
 });
 
-test("normal startup refuses alternate sources before opening the legacy browser", () => {
+test("normal startup refuses a conflicting alternate-site name before opening a database", () => {
   const result = spawnSync(process.execPath, ["server/start.mjs"], {
     encoding: "utf8",
     env: {
       ...process.env,
       NODE_ENV: "development",
       SITE_SOURCE_CONFIG: fixture,
+      SITE_NAME: "A different site",
     },
   });
   assert.notEqual(result.status, 0);
   assert.match(
     result.stderr,
-    /Alternate site startup is disabled.*browser layout and assets/i,
+    /SITE_NAME must match/i,
   );
   assert.doesNotMatch(result.stdout, /API: http/);
 });
@@ -253,4 +254,23 @@ test("footprint assessment in an injected server uses the selected layout", asyn
   } finally {
     await db.close();
   }
+});
+
+test("alternate source exposes its own assets and refuses legacy amenity staging", async () => {
+  const selected = await loadSiteSource(fixture);
+  const db = await openDatabase({ url: null, dir: ":memory:" });
+  try {
+    await migrate(db);
+    await seed(db, { source: selected.source });
+    const origin = "http://localhost:5173";
+    await createUser(db, { email: "siteb@example.invalid", name: "Site B owner", password: "Synthetic-test-only-927156!", role: "owner" });
+    const app = createApp(db, { origin, logging: false, sourceLayout: selected.layout, sourceBundle: selected.source.layoutFile, siteConfig: { name: selected.source.name }, sourceAssets: selected.source.assets });
+    const project = await request(app).get("/api/public/project");
+    assert.deepEqual(project.body.sourceAssets, selected.source.assets);
+    const agent = request.agent(app);
+    const login = await agent.post("/api/auth/login").set("Origin", origin).send({ email: "siteb@example.invalid", password: "Synthetic-test-only-927156!" });
+    const stage = await agent.post("/api/admin/amenity-references/stage").set("Origin", origin).set("X-CSRF-Token", login.body.csrf).set("Idempotency-Key", randomUUID()).send({ reason: "Synthetic review" });
+    assert.equal(stage.status, 404);
+    assert.equal((await db.query("SELECT count(*)::int AS count FROM content WHERE id LIKE 'owner-ref-%'")).rows[0].count, 0);
+  } finally { await db.close(); }
 });

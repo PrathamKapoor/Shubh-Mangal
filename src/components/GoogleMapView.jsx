@@ -37,7 +37,7 @@ const copy = {
     reload: "Reload page",
     retry: "Try again",
     geometry:
-      "Boundaries are unavailable. All plot overlays have been cleared. Retry or use the Plan view.",
+      "Boundaries are unavailable. All plot overlays have been cleared. Wait for a refresh or use the Plan view.",
     provisional: "Provisional boundaries",
     provisionalNote:
       "Unapproved plan paths are approximate, not published or surveyed boundaries.",
@@ -69,7 +69,7 @@ const copy = {
     reload: "पेज दोबारा लोड करें",
     retry: "फिर प्रयास करें",
     geometry:
-      "सीमाएँ उपलब्ध नहीं हैं। सभी प्लॉट सीमाएँ हटा दी गई हैं। फिर प्रयास करें या प्लान देखें।",
+      "सीमाएँ उपलब्ध नहीं हैं। सभी प्लॉट सीमाएँ हटा दी गई हैं। रीफ़्रेश की प्रतीक्षा करें या प्लान देखें।",
     provisional: "अस्थायी सीमाएँ",
     provisionalNote:
       "अस्वीकृत प्लान की सीमाएँ अनुमानित हैं; ये प्रकाशित या सर्वेक्षित सीमाएँ नहीं हैं।",
@@ -100,6 +100,7 @@ export default function GoogleMapView({
   onExit,
   hindi = false,
   stale = false,
+  publicGeometry = null,
   visitorAccess = null,
   onAccessSelect,
   structures = [],
@@ -118,9 +119,11 @@ export default function GoogleMapView({
   const [ready, setReady] = useState(false),
     [failure, setFailure] = useState(null),
     [retry, setRetry] = useState(0);
-  const [collection, setCollection] = useState(null),
-    [geometryError, setGeometryError] = useState(false),
+  const [geometryError, setGeometryError] = useState(false),
     [mapType, setMapType] = useState("roadmap");
+  const validGeometry = publicGeometry?.type === "FeatureCollection" && Array.isArray(publicGeometry.features);
+  const collection = !stale && validGeometry ? publicGeometry : null;
+  const showPublished = Boolean(collection);
   const locationRequest = useRef(null);
   const [device, setDevice] = useState({ status: "idle" });
 
@@ -190,7 +193,7 @@ export default function GoogleMapView({
     };
   }, [ready, device]);
   useEffect(() => {
-    if (!ready || !visitorAccess) return;
+    if (!ready || !showPublished || !visitorAccess) return;
     const point = visitorAccess.physicalAnchor || visitorAccess.routeAccess;
     if (!point) return;
     const layer = new window.google.maps.Data();
@@ -229,10 +232,10 @@ export default function GoogleMapView({
       clearLayer(layer);
       layer.setMap(null);
     };
-  }, [ready, visitorAccess, onAccessSelect]);
+  }, [ready, showPublished, visitorAccess, onAccessSelect]);
 
   useEffect(() => {
-    if (!ready || !structures.length) return;
+    if (!ready || !showPublished || !structures.length) return;
     const layer = new window.google.maps.Data();
     layer.addGeoJson({ type: "FeatureCollection", features: structures.map((item) => ({
       type: "Feature", id: item.id, properties: { featureType: "structure" },
@@ -242,7 +245,7 @@ export default function GoogleMapView({
     const click = layer.addListener("click", (event) => onStructureSelect?.(event.feature.getId()));
     layer.setMap(mapRef.current);
     return () => { click?.remove(); clearLayer(layer); layer.setMap(null); };
-  }, [ready, structures, onStructureSelect]);
+  }, [ready, showPublished, structures, onStructureSelect]);
 
   useEffect(() => {
     if (!enabled || boundsKey === "null") return;
@@ -259,7 +262,6 @@ export default function GoogleMapView({
       clearLayer(layer);
       layer?.setMap(null);
       setReady(false);
-      setCollection(null);
       setFailure(error.code || "network");
     };
     loadGoogleMaps({ key, signal: controller.signal, onAuthFailure: fail })
@@ -303,60 +305,6 @@ export default function GoogleMapView({
     };
   }, [enabled, key, boundsKey, retry]);
 
-  useEffect(() => {
-    if (!ready) return;
-    let active = true,
-      request,
-      requestTimeout;
-    async function refresh() {
-      window.clearTimeout(requestTimeout);
-      request?.abort();
-      const current = new AbortController();
-      request = current;
-      const timeout = (requestTimeout = window.setTimeout(() => {
-        if (!active || request !== current) return;
-        current.abort();
-        clearLayer(layerRef.current);
-        setCollection(null);
-        setGeometryError(true);
-      }, 12000));
-      try {
-        const response = await fetch("/api/public/geometry", {
-          signal: current.signal,
-          credentials: "same-origin",
-          cache: "no-store",
-        });
-        if (!response.ok) throw Error("geometry");
-        const result = await response.json();
-        if (
-          result?.type !== "FeatureCollection" ||
-          !Array.isArray(result.features)
-        )
-          throw Error("geometry");
-        if (!active || request !== current || current.signal.aborted) return;
-        setCollection(result);
-        setGeometryError(false);
-      } catch {
-        if (!active || request !== current || current.signal.aborted) return;
-        clearLayer(layerRef.current);
-        setCollection(null);
-        setGeometryError(true);
-      } finally {
-        window.clearTimeout(timeout);
-      }
-    }
-    refresh();
-    const timer = window.setInterval(refresh, 60000);
-    window.addEventListener("focus", refresh);
-    return () => {
-      active = false;
-      request?.abort();
-      window.clearTimeout(requestTimeout);
-      window.clearInterval(timer);
-      window.removeEventListener("focus", refresh);
-    };
-  }, [ready, retry]);
-
   const model = useMemo(() => {
     if (!collection) return { type: "FeatureCollection", features: [] };
     try {
@@ -377,6 +325,7 @@ export default function GoogleMapView({
     if (model) {
       try {
         layer.addGeoJson(model);
+        setGeometryError(false);
       } catch {
         clearLayer(layer);
         setGeometryError(true);
@@ -513,7 +462,7 @@ export default function GoogleMapView({
             ? " सटीकता कम है; प्लॉट की पहचान नहीं की जा सकती।"
             : " Low accuracy; this cannot identify a parcel.")}
       </p>
-      {visitorAccess && (
+      {showPublished && visitorAccess && (
         <p>
           <a
             href={directionsUrl(visitorAccess)}
@@ -561,19 +510,12 @@ export default function GoogleMapView({
       )}
       {!error && !ready && <p role="status">{text.loading}</p>}
       {stale && <p role="status">{text.stale}</p>}
-      {!error && (geometryError || !model) && (
+      {!error && (geometryError || !model || (!stale && publicGeometry != null && !validGeometry)) && (
         <div role="alert">
           <p>{text.geometry}</p>
-          <button
-            type="button"
-            style={buttonStyle}
-            onClick={() => setRetry((value) => value + 1)}
-          >
-            {text.retry}
-          </button>
         </div>
       )}
-      {!error && ready && !collection && !geometryError && (
+      {!error && ready && !stale && publicGeometry == null && !geometryError && (
         <p role="status">{text.loadingGeometry}</p>
       )}
       {!error && missing && <p role="status">{text.missing}</p>}

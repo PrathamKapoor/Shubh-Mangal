@@ -125,6 +125,7 @@ function mapImageFor(amenity, reference, failedImages) {
 }
 export default function MapCanvas({
   data,
+  sourceAssets = {},
   plots: sourcePlots,
   selected,
   onSelect,
@@ -142,6 +143,7 @@ export default function MapCanvas({
   onAmenityClose,
   language = "en",
   stale = false,
+  publicGeometry = null,
   visitorAccess = null,
   structures = [],
 }) {
@@ -887,12 +889,12 @@ export default function MapCanvas({
           >
             {hi ? "2D योजना (मूल नक्शा)" : "2D plan (Source drawing)"}
           </button>
-          <button
+          {sourceAssets.surveyPlan && <button
             aria-pressed={mapMode === "original"}
             onClick={() => setMapMode("original")}
           >
             {hi ? "मूल योजना" : "Original plan"}
-          </button>
+          </button>}
         </div>
         <span>
           {mapMode === "google"
@@ -2048,6 +2050,7 @@ export default function MapCanvas({
                   onSelect={onSelect}
                   hindi={hi}
                   stale={stale}
+                  publicGeometry={publicGeometry}
                   visitorAccess={visitorAccess}
                   onAccessSelect={() => setAccessSelected(true)}
                   structures={structures}
@@ -2104,13 +2107,13 @@ export default function MapCanvas({
                   ? "मूल दस्तावेज़; सभी माप और स्थितियों की पुष्टि आवश्यक है। चुना प्लॉट अन्य दृश्यों में बना रहेगा।"
                   : "Supplied document; measurements and availability need confirmation. Your selected plot stays selected in the map views."}
               </p>
-              <a
-                href="/downloads/survey-plan-north.pdf"
+              {sourceAssets.surveyPdf && <a
+                href={sourceAssets.surveyPdf}
                 target="_blank"
                 rel="noreferrer"
               >
                 {hi ? "मूल PDF खोलें ↗" : "Open original PDF ↗"}
-              </a>
+              </a>}
               {expanded && (
                 <button type="button" onClick={() => setExpanded(false)}>
                   {hi ? "पूरा नक्शा बंद करें" : "Exit fullscreen map"}
@@ -2130,7 +2133,7 @@ export default function MapCanvas({
               </p>
             )}
             <img
-              src="/assets/survey-plan-north.png"
+              src={sourceAssets.surveyPlan}
               loading="lazy"
               decoding="async"
               onLoad={() => setPlanImageStatus("loaded")}

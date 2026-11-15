@@ -9,7 +9,8 @@ import React, {
 import { createRoot } from "react-dom/client";
 import { filterPlots, areaLabel, approvedBlocks } from "../shared/domain.mjs";
 import { createSiteConfig } from "../shared/site-config.mjs";
-import { api, loadStored, loadPublicInventory } from "./services/api";
+import { loadStored } from "./services/api";
+import { createPublicRefresh } from "./services/public-refresh";
 import { isLegacyReferenceMismatch, loadSelectedLayout } from "./services/layout";
 import {
   ownerAmenityReferences,
@@ -78,6 +79,7 @@ class Boundary extends React.Component {
     );
   }
 }
+const buildSite = import.meta.env.VITE_SITE_BOOTSTRAP;
 function App() {
   const hasPublicData = useRef(false);
   const [route, setRoute] = useState(readRoute),
@@ -85,14 +87,19 @@ function App() {
     [error, setError] = useState(""),
     [retry, setRetry] = useState(0),
     [inventory, setInventory] = useState([]),
+    [publicGeometry, setPublicGeometry] = useState(null),
     [mode, setMode] = useState("offline"),
     [content, setContent] = useState([]),
-    [siteConfig, setSiteConfig] = useState(() => createSiteConfig()),
+    [siteConfig, setSiteConfig] = useState(() => createSiteConfig({ name: buildSite.name })),
     [siteExtent, setSiteExtent] = useState(null),
-    [legacyReferenceAvailable, setLegacyReferenceAvailable] = useState(false),
+    [legacyReferenceAvailable, setLegacyReferenceAvailable] = useState(buildSite.legacy),
+    [legacySource, setLegacySource] = useState(buildSite.legacy),
+    [sourceAssets, setSourceAssets] = useState(buildSite.assets),
     [siteAccessStatus, setSiteAccessStatus] = useState("unavailable"),
     [stale, setStale] = useState(false),
-    [publicReady, setPublicReady] = useState(false);
+    [refreshing, setRefreshing] = useState(false),
+    [publicReady, setPublicReady] = useState(false),
+    [identityError, setIdentityError] = useState(false);
   const mismatchedReference = isLegacyReferenceMismatch(layoutResult, mode, siteConfig.name, siteExtent);
   const data = publicReady && !mismatchedReference ? layoutResult?.layout || null : null;
   const layoutError = error || (publicReady && mismatchedReference ? "The selected layout is unavailable." : "");
@@ -235,7 +242,7 @@ function App() {
       controller.abort();
       setError("The colony drawing timed out. Please retry.");
     }, NETWORK_TIMEOUT_MS);
-    loadSelectedLayout({ signal: controller.signal, allowOffline: !hasPublicData.current })
+    loadSelectedLayout({ signal: controller.signal, allowOffline: buildSite.legacy && !hasPublicData.current })
       .then(setLayoutResult)
       .catch((e) => {
         if (e.name !== "AbortError") setError(e.message);
@@ -247,56 +254,48 @@ function App() {
     };
   }, [retry, exploring, path === "/contact", path === "/compare"]);
   useEffect(() => {
-    let active = true,
-      request;
-    async function refresh() {
-      request?.abort();
-      const current = new AbortController();
-      request = current;
-      const signal = current.signal;
-      const timer = setTimeout(() => {
-        current.abort();
-        if (active && request === current) {
-          setStale(true);
-          if (!hasPublicData.current) setMode("offline");
-          setPublicReady(true);
+    const controller = createPublicRefresh({
+      timeoutMs: NETWORK_TIMEOUT_MS,
+      onStart() {
+        setRefreshing(true);
+        if (hasPublicData.current) setStale(true);
+      },
+      onSnapshot(snapshot) {
+        const project = snapshot.project;
+        if (project.sourceIdentity !== buildSite.id) {
+          setIdentityError(true);
+          throw Error("The browser source does not match this site.");
         }
-      }, NETWORK_TIMEOUT_MS);
-      try {
-        const [project, result] = await Promise.all([
-          api("/public/project", { signal }),
-          loadPublicInventory(signal),
-        ]);
-        if (active && request === current) {
-          setSiteConfig(createSiteConfig(project.siteConfig));
-          setMode(project.mode);
-          setContent(project.items);
-          setSiteExtent(project.geographicBounds || null);
-          setLegacyReferenceAvailable(project.legacyReferenceAvailable === true);
-          setSiteAccessStatus(project.siteAccessStatus || "unavailable");
-          setInventory(result);
-          setStale(false);
-          hasPublicData.current = true;
-        }
-      } catch (e) {
-        if (active && request === current && e.name !== "AbortError") {
-          setStale(true);
-          if (!hasPublicData.current) setMode("offline");
-        }
-      } finally {
-        clearTimeout(timer);
-        if (active && request === current && !signal.aborted)
-          setPublicReady(true);
-      }
-    }
-    refresh();
-    const timer = setInterval(refresh, 60000);
-    window.addEventListener("focus", refresh);
+        setIdentityError(false);
+        setSiteConfig(createSiteConfig(project.siteConfig));
+        setMode(project.mode);
+        setContent(project.items);
+        setSiteExtent(project.geographicBounds || null);
+        setLegacyReferenceAvailable(project.legacyReferenceAvailable === true);
+        setLegacySource(project.legacySource === true);
+        setSourceAssets(project.sourceAssets || {});
+        setSiteAccessStatus(project.siteAccessStatus || "unavailable");
+        setInventory(snapshot.plots);
+        setPublicGeometry(snapshot.geometry);
+        setStale(false);
+        setRefreshing(false);
+        hasPublicData.current = true;
+        setPublicReady(true);
+      },
+      onFailure() {
+        setRefreshing(false);
+        setStale(true);
+        if (!hasPublicData.current) setMode("offline");
+        setPublicReady(true);
+      },
+    });
+    controller.refresh();
+    const timer = setInterval(controller.refresh, 60000);
+    window.addEventListener("focus", controller.refresh);
     return () => {
-      active = false;
-      request?.abort();
+      controller.dispose();
       clearInterval(timer);
-      window.removeEventListener("focus", refresh);
+      window.removeEventListener("focus", controller.refresh);
     };
   }, [retry, path]);
   const plots = useMemo(() => {
@@ -316,7 +315,7 @@ function App() {
         (c) => c.kind === "amenity" && c.published.customerVisible !== false,
       )
       .map((c) => ({ id: c.id, ...c.published }));
-    if (mode === "connected") return published;
+    if (mode === "connected" || !legacyReferenceAvailable) return published;
     const ids = new Set(published.map((item) => item.id));
     return [
       ...published,
@@ -324,11 +323,11 @@ function App() {
         .filter((item) => !ids.has(item.id))
         .map(previewAmenity),
     ];
-  }, [content, mode]);
+  }, [content, mode, legacyReferenceAvailable]);
   // The shared visual is an owner-controlled layer, not a third facility.
   const amenities = useMemo(
-    () => mapAmenities.filter((item) => !referenceFor(item.id)?.internalVisual),
-    [mapAmenities],
+    () => mapAmenities.filter((item) => !legacySource || !referenceFor(item.id)?.internalVisual),
+    [mapAmenities, legacySource],
   );
   const presentationPlacements = useMemo(
     () =>
@@ -463,6 +462,8 @@ function App() {
     setTour(i);
     navigate(tourSteps[i][2]);
   }
+  if (!publicReady && path !== "/contact") return <p role="status">Loading site…</p>;
+  if (identityError) return <p role="alert">The browser source does not match this site. Use a matching site build.</p>;
   return (
     <>
       <a className="skip-link" href="#main">
@@ -471,10 +472,10 @@ function App() {
       <header className="top">
         <a href="/" className="brand" aria-label={`${siteConfig.name} home`}>
           <span className="brand-mark">
-            शु<span>SM</span>
+            {legacySource ? <>शु<span>SM</span></> : <span aria-hidden="true">◇</span>}
           </span>
           <span>
-            SHUBH MANGAL<small>R E S I D E N C Y</small>
+            {legacySource ? <>SHUBH MANGAL<small>R E S I D E N C Y</small></> : siteConfig.name}
           </span>
         </a>
         <button
@@ -573,11 +574,11 @@ function App() {
                 <span>THE COLONY, AT A GLANCE</span>
                 <span>N ↑</span>
               </div>
-              <img
-                src="/assets/geographic-layout.svg"
+              {sourceAssets.schematic && <img
+                src={sourceAssets.schematic}
                 alt="North-up schematic of the supplied colony geometry; approximate boundaries"
                 fetchPriority="high"
-              />
+              />}
               <div className="plan-bottom">
                 <span>
                   Explore the real source drawing
@@ -647,12 +648,12 @@ function App() {
             <div className="amenity-grid">
               {(amenities.length
                 ? amenities.slice(0, 4)
-                : [
+                : legacySource ? [
                     "Road network",
                     "Water supply",
                     "Electricity",
                     "Landscaping",
-                  ].map((title) => ({ title, state: "confirmation_pending" }))
+                  ].map((title) => ({ title, state: "confirmation_pending" })) : []
               ).map((s, i) => (
                 <article key={s.title}>
                   <span className="line-icon">{["↔", "◉", "ϟ", "♧"][i]}</span>
@@ -679,7 +680,7 @@ function App() {
       ) : path === "/admin" ? (
         <main id="main" className="admin-page">
           <Suspense fallback={<p>Opening owner workspace…</p>}>
-            <Admin />
+            <Admin siteConfig={siteConfig} sourceAssets={sourceAssets} legacySource={legacySource} />
           </Suspense>
         </main>
       ) : (
@@ -710,9 +711,11 @@ function App() {
               </div>
               {stale && (
                 <div className="connection-note" role="status">
-                  {mode === "offline"
-                    ? "Live inventory is not connected. Showing the reference plan."
-                    : "Inventory refresh failed. Displayed data may be stale."}{" "}
+                  {refreshing
+                    ? "Refreshing published information. Gate directions and overlays are temporarily unavailable."
+                    : mode === "offline"
+                      ? "Live inventory is not connected. Showing the reference plan."
+                      : "Inventory refresh failed. Displayed data may be stale."}{" "}
                   <button onClick={() => setRetry((n) => n + 1)}>
                     Retry connection
                   </button>
@@ -725,8 +728,8 @@ function App() {
                   <button onClick={() => setRetry((n) => n + 1)}>
                     Retry layout
                   </button>
-                  {(legacyReferenceAvailable || (mode === "offline" && !hasPublicData.current)) && <a
-                    href="/assets/geographic-layout.svg"
+                  {legacyReferenceAvailable && sourceAssets.schematic && <a
+                    href={sourceAssets.schematic}
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -910,7 +913,7 @@ function App() {
                         <input
                           type="search"
                           placeholder={
-                            hindi ? "जैसे B26" : "Try a plot number, e.g. B26"
+                            legacySource ? (hindi ? "जैसे B26" : "Try a plot number, e.g. B26") : "Search plot numbers"
                           }
                           value={filters.query}
                           onChange={(e) =>
@@ -1225,6 +1228,7 @@ function App() {
                         )}
                         <MapCanvas
                           data={data}
+                          sourceAssets={sourceAssets}
                           plots={plots}
                           selected={selected}
                           units={units}
@@ -1243,6 +1247,7 @@ function App() {
                           language={language}
                           stale={stale}
                           visitorAccess={visitorAccess}
+                          publicGeometry={publicGeometry}
                           structures={mapStructures}
                         />
                       </div>
@@ -1364,8 +1369,7 @@ function App() {
                 <span className="eyebrow">GET YOUR BEARINGS</span>
                 <h1>Begin with the location.</h1>
                 <p>
-                  The drawing is geographically positioned using the supplied
-                  KML.{" "}
+                  The drawing is geographically positioned using the selected source.{" "}
                   {visitorAccess
                     ? "A reviewed visitor entrance is published."
                     : "The visitor entrance and approach route have not yet been confirmed."}
@@ -1397,13 +1401,13 @@ function App() {
                     View approximate site area ↗
                   </a>
                 )}
-                <a
+                {sourceAssets.kml && <a
                   className="button"
-                  href="/downloads/Shubh_Mangal_Full_Layout.kml"
+                  href={sourceAssets.kml}
                   download
                 >
                   Download source KML ↓
-                </a>
+                </a>}
                 <h2>Nearby places</h2>
                 {content.filter((c) => c.kind === "nearby").length ? (
                   content
@@ -1429,16 +1433,16 @@ function App() {
                 )}
                 <a href="/contact?type=visit">Request a visit →</a>
               </div>
-              <figure className="location-preview">
+              {sourceAssets.schematic && <figure className="location-preview">
                 <img
-                  src="/assets/geographic-layout.svg"
-                  alt="Approximate colony footprint from supplied KML"
+                  src={sourceAssets.schematic}
+                  alt="Approximate site footprint from the selected source"
                   loading="lazy"
                 />
                 <figcaption>
                   Geographic drawing · north up · no satellite imagery
                 </figcaption>
-              </figure>
+              </figure>}
             </section>
           ) : path === "/amenities" ? (
             <section className="page">
@@ -1451,7 +1455,7 @@ function App() {
               <div className="amenity-grid large">
                 {(amenities.length
                   ? amenities
-                  : [
+                  : legacySource ? [
                       "Road network",
                       "Water supply",
                       "Electricity",
@@ -1464,7 +1468,7 @@ function App() {
                       description:
                         "Referenced in the supplied plan or poster. Current availability, specification and completion await owner confirmation.",
                       source: "Supplied source documents",
-                    }))
+                    })) : []
                 ).map((a) => (
                   <article key={a.title}>
                     <span className="line-icon">◇</span>
@@ -1500,39 +1504,39 @@ function App() {
             <section className="page">
               <span className="eyebrow">THE ORIGINAL SOURCES</span>
               <h1>See where the details begin.</h1>
-              <p>
+              {legacySource && <p>
                 The supplied PDF is the reference for owner review. Final plot
                 dimensions, identity, approvals and legal details require
                 verification.
-              </p>
+              </p>}
               <div className="plans">
-                <article>
+                {sourceAssets.surveyPlan && <article>
                   <h2>North-oriented survey plan</h2>
                   <p>
                     Rendering of the supplied PDF. Its subdivisions need
                     reconciliation with the map and poster.
                   </p>
                   <a
-                    href="/assets/survey-plan-north.png"
+                    href={sourceAssets.surveyPlan}
                     target="_blank"
                     rel="noreferrer"
                   >
                     <img
-                      src="/assets/survey-plan-north.png"
+                      src={sourceAssets.surveyPlan}
                       alt="Supplied north-oriented source plan, open full resolution to inspect"
                       loading="lazy"
                     />
                   </a>
-                  <a
+                  {sourceAssets.surveyPdf && <a
                     className="button"
-                    href="/downloads/survey-plan-north.pdf"
+                    href={sourceAssets.surveyPdf}
                     target="_blank"
                     rel="noreferrer"
                   >
                     Open original PDF ↗
-                  </a>
-                </article>
-                <article>
+                  </a>}
+                </article>}
+                {sourceAssets.poster && <article>
                   <h2>Marketing poster</h2>
                   <p className="warning">
                     Unverified historical marketing source. The RERA, loan,
@@ -1540,17 +1544,17 @@ function App() {
                     confirmed by this website.
                   </p>
                   <a
-                    href="/assets/colony-poster.png"
+                    href={sourceAssets.poster}
                     target="_blank"
                     rel="noreferrer"
                   >
                     <img
-                      src="/assets/colony-poster.png"
+                      src={sourceAssets.poster}
                       alt="Supplied marketing poster containing unverified approval and facility claims"
                       loading="lazy"
                     />
                   </a>
-                </article>
+                </article>}
               </div>
               <h2>Owner-approved gallery & documents</h2>
               {content.filter((c) => c.kind === "media").length ? (
@@ -1690,7 +1694,7 @@ function App() {
       )}
       <footer>
         <a className="brand footer-brand" href="/">
-          SHUBH MANGAL<small>शुभ मंगल रेजिडेंसी</small>
+          {legacySource ? <>SHUBH MANGAL<small>शुभ मंगल रेजिडेंसी</small></> : siteConfig.name}
         </a>
         <p>
           A thoughtful beginning.

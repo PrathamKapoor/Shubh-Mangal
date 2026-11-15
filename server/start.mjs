@@ -1,7 +1,8 @@
 import { openDatabase } from "./db.mjs";
 import { createApp } from "./app.mjs";
-import { isAbsolute } from "node:path";
-import { readdir } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
+import { readFile, readdir } from "node:fs/promises";
+import { assertBuildIdentity, buildIdentity } from "./site-build.mjs";
 import { loadSiteSource, assertSourceDatabase } from "./site-source.mjs";
 import { createSiteSource } from "../shared/site-source.mjs";
 const production = process.env.NODE_ENV === "production";
@@ -16,10 +17,21 @@ if (
     "Set an HTTPS APP_ORIGIN, explicit DEMO_MODE and absolute MEDIA_DIRECTORY before production start",
   );
 const selected = await loadSiteSource(process.env.SITE_SOURCE_CONFIG);
-if (JSON.stringify(selected.source) !== JSON.stringify(createSiteSource()))
-  throw Error(
-    "Alternate site startup is disabled until the browser layout and assets use the selected source.",
-  );
+const staticDirectory = resolve(process.env.SITE_BUILD_DIR || "dist");
+const alternate = JSON.stringify(selected.source) !== JSON.stringify(createSiteSource());
+if (alternate) {
+  const synthetic = await loadSiteSource("tests/fixtures/second-site/source.json");
+  if (JSON.stringify(selected.source) !== JSON.stringify(synthetic.source) || selected.revision !== synthetic.revision)
+    throw Error("Alternate site startup is disabled except for the isolated synthetic fixture.");
+  if (process.env.SITE_NAME !== undefined && process.env.SITE_NAME !== selected.source.name)
+    throw Error("SITE_NAME must match the selected synthetic source identity.");
+}
+if (production || alternate) {
+  let manifest;
+  try { manifest = JSON.parse(await readFile(resolve(staticDirectory, "site-build.json"), "utf8")); }
+  catch { throw Error("Browser build identity is missing; build with the selected SITE_SOURCE_CONFIG."); }
+  assertBuildIdentity(manifest, selected);
+}
 const db = await openDatabase();
 try {
   const applied = new Set(
@@ -48,13 +60,16 @@ const port = Number(process.env.API_PORT || 3001);
 const server = createApp(db, {
   serveStatic: production,
   sourceLayout: selected.layout,
+  sourceAssets: selected.source.assets,
   sourceBundle: selected.source.layoutFile,
+  sourceIdentity: buildIdentity(selected).digest,
+  staticDirectory,
   ...(process.env.SITE_SOURCE_CONFIG !== undefined &&
   process.env.SITE_NAME === undefined
     ? { siteConfig: { name: selected.source.name } }
     : {}),
 }).listen(port, process.env.API_HOST || "127.0.0.1", () =>
-  console.info(`Shubh Mangal API: http://127.0.0.1:${port} (${db.kind})`),
+  console.info(`${selected.source.name} API: http://127.0.0.1:${port} (${db.kind})`),
 );
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () =>
