@@ -469,6 +469,16 @@ test("synthetic footprint is staged privately and only a saved draft can be publ
     422,
   );
   assert.deepEqual((await record()).published, reviewed);
+  const collisionId = randomUUID();
+  await db.query("INSERT INTO geometry_revisions(id,source_hash,provenance) VALUES('access-collision','fixture','{}')");
+  await db.query("INSERT INTO draft_cells(id,revision_id,data) VALUES('access-collision','access-collision',$1)", [JSON.stringify({ geographicGeometry: { type: "Polygon", coordinates: [footprint.outer] } })]);
+  await db.query("INSERT INTO plots(id,number,block,data,publication,verified_at) VALUES($1,'collision','TEST','{}','published',now())", [collisionId]);
+  await db.query("INSERT INTO plot_geometry(plot_id,draft_id,revision_id) VALUES($1,'access-collision','access-collision')", [collisionId]);
+  const overlap = await stage("content_editor", footprint);
+  expectStatus(overlap, 422);
+  assert.match(JSON.stringify(overlap.body), new RegExp(collisionId));
+  assert.equal((await record()).version, 1);
+  await db.query("UPDATE plots SET publication='draft' WHERE id=$1", [collisionId]);
   expectStatus(
     await put(
       "owner",
@@ -499,12 +509,18 @@ test("synthetic footprint is staged privately and only a saved draft can be publ
     ),
     422,
   );
+  await db.query("UPDATE plots SET publication='published' WHERE id=$1", [collisionId]);
+  expectStatus(await put("owner", saved.body.draft, { version: 2, publish: true }), 422);
+  assert.deepEqual((await record()).published, reviewed);
+  await db.query("UPDATE plots SET publication='draft' WHERE id=$1", [collisionId]);
   const published = await put("owner", saved.body.draft, {
     version: 2,
     publish: true,
   });
   expectStatus(published, 200);
-  assert.deepEqual((await project()).items[0].published.footprint, footprint);
+  const publicFootprint = (await project()).items[0].published.footprint;
+  assert.deepEqual(publicFootprint, { outer: footprint.outer, holes: footprint.holes });
+  assert.ok(!JSON.stringify(publicFootprint).includes("Synthetic survey fixture"));
   const entries = await auditRows();
   assert.ok(
     entries.some(

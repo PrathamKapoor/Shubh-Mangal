@@ -487,8 +487,10 @@ export default function FootprintReview({ item, busy, onStage }) {
             </ul>
           )}
           <p>
-            Review these warnings and surrounding features before publication.
-            This assessment does not establish a surveyed location or prove clearance.
+            Staging and publication check positive-area overlap with current
+            published mapped parcels. Draft parcels, structures and road clearance
+            are not checked. This does not establish a surveyed location or prove
+            clearance.
           </p>
         </div>
       )}

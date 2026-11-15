@@ -55,7 +55,7 @@ import { validateFootprint, assessFootprint } from "../shared/footprint.mjs";
 import { createSiteConfig, plotPageTitle } from "../shared/site-config.mjs";
 const uuid = z.uuid();
 const json = (v) => JSON.stringify(v);
-function assessAccessFootprint(footprint) {
+async function assessAccessFootprint(footprint, db) {
   const project = ([lon, lat]) => {
     // The source layout's UTM zone is not a global projection.
     const [west, south, east] = sourceLayout.geographicBounds;
@@ -87,12 +87,33 @@ function assessAccessFootprint(footprint) {
       "Invalid footprint topology or access interactions",
     );
   const [x, y, w, h] = sourceLayout.viewBox;
+  const current = await publicGeometry(db, sourceLayout);
+  if (current.features.length !== current.mappings.length)
+    throw new HttpError(422, "A published plot has no usable geometry; resolve it before reviewing the entrance footprint");
+  const polygons = [];
+  for (const feature of current.features) {
+    const geometry = feature.geometry;
+    try {
+      const parts = geometry?.type === "Polygon" ? [geometry.coordinates] : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
+      if (!Array.isArray(parts) || !parts.length) throw Error("unsupported geometry");
+      for (const [index, rings] of parts.entries()) {
+        const polygon = { id: `${feature.id}:${index}`, outer: rings[0].map(project), holes: rings.slice(1).map((ring) => ring.map(project)) };
+        if (!validateFootprint({ ...polygon, interactions: [] }).valid) throw Error("invalid geometry");
+        polygons.push(polygon);
+      }
+    } catch {
+      throw new HttpError(422, `Published plot ${feature.id} has invalid or unsupported geometry`);
+    }
+  }
   const assessment = assessFootprint(projected, {
     bounds: [x, y, x + w, y + h],
-    polygons: [],
+    polygons,
   });
   if (!assessment.withinBounds)
     throw new HttpError(422, "Footprint is outside the source plan extent");
+  if (assessment.overlaps.length)
+    throw new HttpError(422, `Footprint overlaps published plot ${assessment.overlaps[0].id.split(":")[0]}`);
+  assessment.warnings.push("Reviewed structure and road-clearance checks are not available; inspect those relationships before publication.");
   return assessment;
 }
 export function createApp(
@@ -315,7 +336,26 @@ export function createApp(
               Boolean(reviewedVisitorAccess([item]))),
         )
         .map((item) =>
-          item.kind === "presentation"
+          item.kind === "site_access"
+            ? {
+                ...item,
+                published: {
+                  title: item.published.title,
+                  routeAccess: item.published.routeAccess,
+                  physicalAnchor: item.published.physicalAnchor,
+                  ...(item.published.headingDegrees !== undefined ? { headingDegrees: item.published.headingDegrees } : {}),
+                  state: item.published.state,
+                  source: item.published.source,
+                  sourceRevision: item.published.sourceRevision,
+                  verifiedAt: item.published.verifiedAt,
+                  customerVisible: item.published.customerVisible,
+                  ...(item.published.footprint ? { footprint: {
+                    outer: item.published.footprint.outer,
+                    holes: item.published.footprint.holes,
+                  } } : {}),
+                },
+              }
+            : item.kind === "presentation"
             ? {
                 ...item,
                 published: {
@@ -1116,7 +1156,6 @@ export function createApp(
         })
         .strict()
         .parse(req.body);
-      const assessment = assessAccessFootprint(body.footprint);
       res.json(
         await idempotent(
           req,
@@ -1134,6 +1173,7 @@ export function createApp(
               );
             if (old.version !== body.expectedVersion)
               throw new HttpError(409, "Content changed; reload it");
+            const assessment = await assessAccessFootprint(body.footprint, tx);
             const draft = contentSchemas.site_access.parse({
               ...old.draft,
               footprint: body.footprint,
@@ -1181,7 +1221,6 @@ export function createApp(
       .parse(req.body);
     const data = contentSchemas[body.kind].parse(body.data);
     if (body.kind === "site_access" && data.footprint) {
-      assessAccessFootprint(data.footprint);
       if (!body.publish)
         throw new HttpError(
           422,
@@ -1257,6 +1296,8 @@ export function createApp(
             throw new HttpError(409, "Content changed; reload it");
           if (old && old.kind !== body.kind)
             throw new HttpError(422, "Content kind cannot change");
+          if (body.kind === "site_access" && data.footprint && body.publish)
+            await assessAccessFootprint(data.footprint, tx);
           if (
             body.kind === "site_access" &&
             data.footprint &&

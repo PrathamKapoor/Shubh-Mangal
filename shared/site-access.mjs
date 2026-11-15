@@ -75,6 +75,12 @@ export const siteAccessSchema = z
   })
   .strict();
 
+// Customer responses omit footprint evidence and interaction details. The
+// private publication contract above continues to require those fields.
+const publicAccessSchema = siteAccessSchema.extend({
+  footprint: z.object({ outer: ring, holes: z.array(ring).max(8) }).strict().optional(),
+});
+
 // Returns the published payload, never a draft or legacy entrance fallback.
 export function reviewedVisitorAccess(content) {
   if (!Array.isArray(content)) return null;
@@ -82,8 +88,9 @@ export function reviewedVisitorAccess(content) {
     (item) => item?.id === "visitor-entrance" && item.kind === "site_access",
   );
   const result = siteAccessSchema.safeParse(item?.published);
-  if (!result.success) return null;
-  const access = result.data;
+  const publicResult = result.success ? result : publicAccessSchema.safeParse(item?.published);
+  if (!publicResult.success) return null;
+  const access = publicResult.data;
   return access.state === "existing" &&
     access.verifiedAt &&
     access.routeAccess &&
