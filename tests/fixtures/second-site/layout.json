@@ -1,0 +1,15 @@
+{
+  "project": "Synthetic Harbour Gardens",
+  "origin": { "utmZone": "32N", "easting": 500000, "northingTop": 5538630 },
+  "geographicBounds": [8.99, 49.99, 9.01, 50.01],
+  "viewBox": [0, 0, 50, 60],
+  "warning": "Synthetic fixture; not a survey.",
+  "plots": [
+    {
+      "id": "synthetic-plot-1",
+      "label": "S1",
+      "path": "M0 0 L10 0 L10 8 L0 8 Z"
+    }
+  ],
+  "areas": []
+}
