@@ -1165,30 +1165,33 @@ test("owner can preview, save and publish a visual-only plot placement", async (
   await expect(page.locator(".details")).toContainText("Verified sold");
 });
 
-test("concept images stay attached to their map areas and open their separate cards", async ({
-  page,
-}) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  const images = [];
-  page.on("request", (request) => {
-    if (request.url().includes("/assets/concepts/")) images.push(request.url());
-  });
-  await page.goto("/explore");
-  await expect(page.locator(".amenity-marker")).toHaveCount(
-    ownerAmenityReferences.filter((item) => !item.internalVisual).length,
-  );
-  await expect(page.locator("[data-amenity-image]")).toHaveCount(
-    ownerAmenityReferences.filter(
-      (item) => !item.internalVisual && item.image && !item.mapNative,
-    ).length,
-  );
-  await expect
-    .poll(() => new Set(images.filter((url) => url.endsWith("-map.webp"))).size)
-    .toBeGreaterThanOrEqual(8);
-  await page.getByText("Explore amenities", { exact: false }).click();
-  for (const ref of ownerAmenityReferences.filter(
-    (item) => !item.internalVisual && item.image && !item.mapNative,
-  )) {
+for (const ref of ownerAmenityReferences.filter(
+  (item) => !item.internalVisual && item.image && !item.mapNative,
+))
+  test(`concept image ${ref.id} stays attached to its map area and opens its card`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const images = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/assets/concepts/"))
+        images.push(request.url());
+    });
+    await page.goto("/explore");
+    await expect(page.locator(".amenity-marker")).toHaveCount(
+      ownerAmenityReferences.filter((item) => !item.internalVisual).length,
+    );
+    await expect(page.locator("[data-amenity-image]")).toHaveCount(
+      ownerAmenityReferences.filter(
+        (item) => !item.internalVisual && item.image && !item.mapNative,
+      ).length,
+    );
+    await expect
+      .poll(
+        () => new Set(images.filter((url) => url.endsWith("-map.webp"))).size,
+      )
+      .toBeGreaterThanOrEqual(8);
+    await page.getByText("Explore amenities", { exact: false }).click();
     await page.getByRole("button", { name: ref.title, exact: true }).click();
     const marker = page.locator(`[data-amenity="${ref.id}"]`);
     await expect(page.locator(".map-amenity-card")).toContainText(ref.title);
@@ -1232,18 +1235,17 @@ test("concept images stay attached to their map areas and open their separate ca
     await page.mouse.click(point.x, point.y);
     await expect(page.locator(".map-amenity-card")).toContainText(ref.title);
     await page.getByRole("button", { name: "Back to full map" }).click();
-  }
-  expect(images.some((url) => url.endsWith("/fountain.png"))).toBeFalsy();
-  await page.route("**/api/public/project", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ mode: "connected", items: [] }),
-    }),
-  );
-  await page.reload();
-  await expect(page.locator(".amenity-marker")).toHaveCount(0);
-});
+    expect(images.some((url) => url.endsWith("/fountain.png"))).toBeFalsy();
+    await page.route("**/api/public/project", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ mode: "connected", items: [] }),
+      }),
+    );
+    await page.reload();
+    await expect(page.locator(".amenity-marker")).toHaveCount(0);
+  });
 
 test("concept overlays retain map coordinates on mobile and fall back when images fail", async ({
   page,
