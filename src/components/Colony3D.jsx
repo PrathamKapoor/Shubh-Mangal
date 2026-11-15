@@ -1,5 +1,6 @@
 import React, { Component, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import ReviewedFootprint3D from "./ReviewedFootprint3D";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import {
@@ -742,6 +743,8 @@ export default function Colony3D({
   visibleIds,
   selectedBlock,
   focusRequest,
+  visitorAccess,
+  onAccessSelect,
 }) {
   const [available, setAvailable] = useState(webGLAvailable);
   const [touchMode, setTouchMode] = useState(false);
@@ -860,6 +863,7 @@ export default function Colony3D({
             <ambientLight intensity={1.5} />
             <directionalLight position={[100, 300, 50]} intensity={1.7} />
             <WebGLGuard onLost={() => setAvailable(false)} />
+            <ReviewedFootprint3D access={visitorAccess} layout={data} onSelect={onAccessSelect} />
             <mesh
               rotation={[-Math.PI / 2, 0, 0]}
               position={[center[0], -1, center[1]]}
