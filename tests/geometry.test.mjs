@@ -120,3 +120,16 @@ for (const [name, feature] of [
     );
     assert.equal(writes, 0);
   });
+
+
+test("revision staging uses the selected site's extent rather than the legacy geographic envelope", async () => {
+  const {default:layout}=await import("./fixtures/second-site/layout.json",{with:{type:"json"}});
+  const {planToGeographic:convert}=await import("../shared/geography.mjs");
+  const feature=structuredClone(outer);
+  feature.geometry.coordinates=[[[10,10],[20,10],[20,20],[10,20],[10,10]].map(([x,y])=>{const p=convert({x,y},layout);return [p.lon,p.lat];})];
+  const tx={query:async()=>({rows:[]})};
+  const result=await stageGeometry(tx,{id:"fixture"},input([feature]),{layout,sourceBundle:"synthetic"});
+  assert.equal(result.cells.length,1);
+  const out=structuredClone(feature);out.geometry.coordinates[0][0]=[74.91,24.47];out.geometry.coordinates[0][4]=[74.91,24.47];
+  await assert.rejects(stageGeometry(tx,{id:"fixture"},input([out]),{layout}),/outside|bounds/i);
+});

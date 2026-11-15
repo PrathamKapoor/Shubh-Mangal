@@ -8,8 +8,8 @@ import { z } from "zod";
 import { hash, audit } from "./auth.mjs";
 import { HttpError } from "./inventory.mjs";
 const coordinate = z.tuple([
-  z.number().min(74.9).max(74.92),
-  z.number().min(24.46).max(24.48),
+  z.number().finite().min(-180).max(180),
+  z.number().finite().min(-90).max(90),
 ]);
 export const revisionSchema = z
   .object({
@@ -95,7 +95,13 @@ export function deriveCell(feature, id, layout = sourceLayout) {
   if (ring[0][0] !== ring.at(-1)[0] || ring[0][1] !== ring.at(-1)[1])
     throw new HttpError(422, "Close each polygon ring explicitly");
   const points = ring.map((p) => {
-    const { x, y } = projectToPlan({ lon: p[0], lat: p[1] }, layout);
+    let position;
+    try { position = projectToPlan({ lon: p[0], lat: p[1] }, layout, { enforceBounds: true }); }
+    catch { throw new HttpError(422, "Coordinate outside the selected site's geographic bounds"); }
+    const { x, y } = position;
+    const [left, top, width, height] = layout.viewBox;
+    if (x < left || x > left + width || y < top || y > top + height)
+      throw new HttpError(422, "Coordinate outside the selected site's plan bounds");
     return [x, y];
   });
   if (
