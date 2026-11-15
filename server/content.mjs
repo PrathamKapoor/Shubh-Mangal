@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { siteAccessSchema } from "../shared/site-access.mjs";
 const s = z
   .string()
   .trim()
@@ -16,6 +17,7 @@ const asset = z
     "Choose an approved local asset path",
   );
 export const contentSchemas = {
+  site_access: siteAccessSchema,
   presentation: z
     .object({
       source: s.min(5),

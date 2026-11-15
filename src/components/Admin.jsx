@@ -1788,14 +1788,27 @@ function ContentEditor({ item, run, mutate, user, busy }) {
             visualRotation: 0,
             ...item.draft,
           }
-        : item.kind === "nearby"
-          ? { category: "", ...item.draft }
-          : item.draft,
+        : item.kind === "site_access"
+          ? { headingDegrees: null, ...item.draft }
+          : item.kind === "nearby"
+            ? { category: "", ...item.draft }
+            : item.draft,
     ),
     [id, setId] = useState(item.id),
     [imageFile, setImageFile] = useState(null),
     [showPicker, setShowPicker] = useState(false);
   const templates = {
+    site_access: {
+      title: "Visitor entrance",
+      routeAccess: null,
+      physicalAnchor: null,
+      headingDegrees: null,
+      state: "confirmation_pending",
+      source: "",
+      sourceRevision: "",
+      verifiedAt: null,
+      customerVisible: false,
+    },
     setting: {
       name: "Shubh Mangal Residency",
       tagline: "",
@@ -1885,7 +1898,7 @@ function ContentEditor({ item, run, mutate, user, busy }) {
           Content ID
           <input
             required
-            disabled={!!item.id}
+            disabled={!!item.id || kind === "site_access"}
             value={id}
             onChange={(e) => setId(e.target.value)}
           />
@@ -1898,6 +1911,13 @@ function ContentEditor({ item, run, mutate, user, busy }) {
               onChange={(e) => {
                 setKind(e.target.value);
                 setDraft(templates[e.target.value]);
+                setId(
+                  e.target.value === "site_access"
+                    ? "visitor-entrance"
+                    : kind === "site_access"
+                      ? ""
+                      : id,
+                );
               }}
             >
               {Object.keys(templates).map((s) => (
@@ -1906,15 +1926,29 @@ function ContentEditor({ item, run, mutate, user, busy }) {
             </select>
           </label>
         )}
+        {kind === "site_access" && (
+          <p className="small">
+            Publication requires existing status, a reviewed source and
+            revision, a review date, and route access coordinates. Physical
+            anchor and heading are optional.
+          </p>
+        )}
         <div className="form-grid">
           {Object.entries(draft).map(([key, value]) =>
-            key === "entrance" || key === "location" ? (
+            ["entrance", "location", "routeAccess", "physicalAnchor"].includes(
+              key,
+            ) ? (
               <div key={key}>
                 <label>
-                  {key === "entrance"
-                    ? "Entrance latitude"
-                    : "Amenity latitude"}{" "}
-                  (confirm before publishing)
+                  {
+                    {
+                      entrance: "Entrance",
+                      location: "Amenity",
+                      routeAccess: "Route access",
+                      physicalAnchor: "Physical anchor",
+                    }[key]
+                  }{" "}
+                  latitude (confirm before publishing)
                   <input
                     type="number"
                     step="any"
@@ -1935,9 +1969,15 @@ function ContentEditor({ item, run, mutate, user, busy }) {
                   />
                 </label>
                 <label>
-                  {key === "entrance"
-                    ? "Entrance longitude"
-                    : "Amenity longitude"}
+                  {
+                    {
+                      entrance: "Entrance",
+                      location: "Amenity",
+                      routeAccess: "Route access",
+                      physicalAnchor: "Physical anchor",
+                    }[key]
+                  }{" "}
+                  longitude
                   <input
                     type="number"
                     step="any"
@@ -2008,7 +2048,10 @@ function ContentEditor({ item, run, mutate, user, busy }) {
                   category: "Category",
                   state: "Status",
                   source: "Source",
+                  sourceRevision: "Source revision / date (required)",
                   verifiedAt: "Last reviewed (ISO date/time)",
+                  headingDegrees:
+                    "Heading (degrees clockwise from north, optional)",
                   imageUrl: "Image path",
                   imageKind: "Image type",
                   placementPrecision: "Location precision",
@@ -2031,11 +2074,14 @@ function ContentEditor({ item, run, mutate, user, busy }) {
                     value={value ?? ""}
                     type={
                       typeof value === "number" ||
-                      ["lat", "lon", "distanceKm"].includes(key)
+                      ["lat", "lon", "distanceKm", "headingDegrees"].includes(
+                        key,
+                      )
                         ? "number"
                         : "text"
                     }
                     step="any"
+                    min={key === "headingDegrees" ? 0 : undefined}
                     placeholder={
                       key === "verifiedAt"
                         ? "ISO date/time, e.g. YYYY-MM-DDT00:00:00Z"
@@ -2046,7 +2092,12 @@ function ContentEditor({ item, run, mutate, user, busy }) {
                         ...draft,
                         [key]:
                           typeof value === "number" ||
-                          ["lat", "lon", "distanceKm"].includes(key)
+                          [
+                            "lat",
+                            "lon",
+                            "distanceKm",
+                            "headingDegrees",
+                          ].includes(key)
                             ? e.target.value === ""
                               ? null
                               : Number(e.target.value)

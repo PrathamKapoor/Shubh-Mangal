@@ -9,6 +9,7 @@ import {
   createLocationRequest,
   locationRelativeToBounds,
 } from "../services/visitor-location.js";
+import { directionsUrl } from "../../shared/site-access.mjs";
 
 const colors = {
   available: "#23734b",
@@ -99,6 +100,7 @@ export default function GoogleMapView({
   onExit,
   hindi = false,
   stale = false,
+  visitorAccess = null,
 }) {
   const text = copy[hindi ? "hi" : "en"];
   const key = import.meta.env.VITE_GOOGLE_MAPS_KEY;
@@ -184,6 +186,35 @@ export default function GoogleMapView({
       marker.setMap(null);
     };
   }, [ready, device]);
+  useEffect(() => {
+    if (!ready || !visitorAccess) return;
+    const point = visitorAccess.physicalAnchor || visitorAccess.routeAccess;
+    if (!point) return;
+    const layer = new window.google.maps.Data();
+    layer.addGeoJson({
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          id: "visitor-entrance",
+          properties: { featureType: "entrance" },
+          geometry: { type: "Point", coordinates: [point.lon, point.lat] },
+        },
+      ],
+    });
+    layer.setStyle({
+      title: visitorAccess.physicalAnchor
+        ? "Reviewed physical entrance anchor"
+        : "Reviewed route-access point",
+      clickable: false,
+      zIndex: 5,
+    });
+    layer.setMap(mapRef.current);
+    return () => {
+      clearLayer(layer);
+      layer.setMap(null);
+    };
+  }, [ready, visitorAccess]);
 
   useEffect(() => {
     if (!enabled || boundsKey === "null") return;
@@ -454,6 +485,27 @@ export default function GoogleMapView({
             ? " सटीकता कम है; प्लॉट की पहचान नहीं की जा सकती।"
             : " Low accuracy; this cannot identify a parcel.")}
       </p>
+      {visitorAccess && (
+        <p>
+          <a
+            href={directionsUrl(visitorAccess)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {hindi
+              ? "समीक्षित प्रवेश मार्ग के दिशा-निर्देश"
+              : "Directions to reviewed visitor access"}
+          </a>{" "}
+          · {hindi ? "प्रवेश चिह्न" : "Entrance pin"}:{" "}
+          {visitorAccess.physicalAnchor
+            ? hindi
+              ? "भौतिक प्रवेश आधार"
+              : "physical anchor"
+            : hindi
+              ? "मार्ग प्रवेश बिंदु"
+              : "route-access point"}
+        </p>
+      )}
       <p>
         {hindi
           ? "गूगल दृश्य खोलने पर मानचित्र प्रदाता से संपर्क होता है। आपका स्थान इस सुविधा की मेमोरी में रहता है; इसे फ़ॉर्म या संग्रह में नहीं जोड़ा जाता। पृष्ठ छिपने या दृश्य बंद होने पर स्थान हटा दिया जाता है।"

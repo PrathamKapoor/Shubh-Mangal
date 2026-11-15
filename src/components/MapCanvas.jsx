@@ -141,6 +141,7 @@ export default function MapCanvas({
   onAmenityClose,
   language = "en",
   stale = false,
+  visitorAccess = null,
 }) {
   const hi = language === "hi";
   const svg = useRef(),
@@ -1992,6 +1993,7 @@ export default function MapCanvas({
                   onSelect={onSelect}
                   hindi={hi}
                   stale={stale}
+                  visitorAccess={visitorAccess}
                   onExit={() => setMapMode("plan")}
                 />
               </Suspense>

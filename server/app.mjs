@@ -46,6 +46,7 @@ import {
 } from "../shared/owner-amenity-references.mjs";
 import { stageImage, mediaFile } from "./media.mjs";
 import { publicGeometry } from "./public-geometry.mjs";
+import { reviewedVisitorAccess } from "../shared/site-access.mjs";
 const uuid = z.uuid();
 const json = (v) => JSON.stringify(v);
 export function createApp(
@@ -253,10 +254,14 @@ export function createApp(
       : new Map();
     res.json({
       mode: demo ? "local-demo" : "connected",
+      geographicBounds: sourceLayout.geographicBounds,
       items: items
         .filter(
           (item) =>
-            item.kind !== "amenity" || item.published.customerVisible !== false,
+            (item.kind !== "amenity" ||
+              item.published.customerVisible !== false) &&
+            (item.kind !== "site_access" ||
+              Boolean(reviewedVisitorAccess([item]))),
         )
         .map((item) =>
           item.kind === "presentation"
@@ -1051,7 +1056,14 @@ export function createApp(
   app.put("/api/admin/content/:id", auth("content"), async (req, res) => {
     const body = z
       .object({
-        kind: z.enum(["setting", "amenity", "media", "nearby", "presentation"]),
+        kind: z.enum([
+          "setting",
+          "amenity",
+          "media",
+          "nearby",
+          "presentation",
+          "site_access",
+        ]),
         data: z.unknown(),
         expectedVersion: z.number().int().min(0),
         publish: z.boolean(),
@@ -1084,6 +1096,14 @@ export function createApp(
     if (body.kind === "setting" && req.params.id !== "project")
       throw new HttpError(422, "Project settings use the project ID");
     if (
+      (body.kind === "site_access") !==
+      (req.params.id === "visitor-entrance")
+    )
+      throw new HttpError(
+        422,
+        "The visitor-entrance ID is reserved for reviewed site access",
+      );
+    if (
       (body.kind === "presentation") !==
       (req.params.id === "illustrated-layout")
     )
@@ -1093,6 +1113,16 @@ export function createApp(
       );
     if (body.publish) {
       requirePermission(req.user, "publish");
+      if (
+        body.kind === "site_access" &&
+        !reviewedVisitorAccess([
+          { id: req.params.id, kind: body.kind, published: data },
+        ])
+      )
+        throw new HttpError(
+          422,
+          "Review existing visitor access coordinates, visibility, source revision and date before publication",
+        );
       if (body.kind === "setting" ? !data.verified : !data.verifiedAt)
         throw new HttpError(
           422,

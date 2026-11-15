@@ -19,6 +19,11 @@ import ContactForm from "./components/ContactForm";
 import Compare from "./components/Compare";
 import AmenityFigure from "./components/AmenityFigure";
 import "./styles.css";
+import {
+  reviewedVisitorAccess,
+  directionsUrl,
+  siteAreaUrl,
+} from "../shared/site-access.mjs";
 const MapCanvas = lazy(() => import("./components/MapCanvas"));
 const Admin = lazy(() => import("./components/Admin"));
 const NETWORK_TIMEOUT_MS = 12_000;
@@ -80,6 +85,7 @@ function App() {
     [inventory, setInventory] = useState([]),
     [mode, setMode] = useState("offline"),
     [content, setContent] = useState([]),
+    [siteExtent, setSiteExtent] = useState(null),
     [stale, setStale] = useState(false),
     [publicReady, setPublicReady] = useState(false);
   const [language, setLanguage] = useState(() =>
@@ -259,6 +265,7 @@ function App() {
         if (active && request === current) {
           setMode(project.mode);
           setContent(project.items);
+          setSiteExtent(project.geographicBounds || null);
           setInventory(result);
           setStale(false);
           hasPublicData.current = true;
@@ -327,6 +334,9 @@ function App() {
       [plots, filters, saved, selectedBlock],
     );
   const project = content.find((c) => c.id === "project")?.published;
+  const visitorAccess = stale ? null : reviewedVisitorAccess(content);
+  const visitorDirections = directionsUrl(visitorAccess);
+  const areaLink = siteAreaUrl(data?.geographicBounds || siteExtent);
   const hindi = language === "hi";
   const statusName = (status) =>
     hindi
@@ -1215,6 +1225,7 @@ function App() {
                           onAmenityClose={() => navigate("/explore")}
                           language={language}
                           stale={stale}
+                          visitorAccess={visitorAccess}
                         />
                       </div>
                     </Suspense>
@@ -1337,23 +1348,35 @@ function App() {
                 <p>
                   The drawing is geographically positioned using the supplied
                   KML.{" "}
-                  {project?.entrance
-                    ? "The owner has provided an entrance coordinate."
+                  {visitorAccess
+                    ? "A reviewed visitor entrance is published."
                     : "The visitor entrance and approach route have not yet been confirmed."}
                 </p>
                 <div className="note">
-                  {project?.entrance
-                    ? "Directions use the owner-confirmed entrance."
-                    : "Directions below point to the approximate drawing centre, not a verified entrance. Confirm access with the team before travelling."}
+                  {visitorAccess
+                    ? "Directions use the reviewed visitor route-access point."
+                    : "Gate directions are unavailable until visitor access is reviewed and published. The site-area link is approximate; confirm access with the team before travelling."}
                 </div>
-                <a
-                  className="button primary"
-                  href={`https://www.google.com/maps/dir/?api=1&destination=${project?.entrance ? `${project.entrance.lat},${project.entrance.lon}` : "24.466215,74.9090765"}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Google Maps directions ↗
-                </a>
+                {visitorDirections && (
+                  <a
+                    className="button primary"
+                    href={visitorDirections}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Google Maps directions ↗
+                  </a>
+                )}
+                {areaLink && (
+                  <a
+                    className="button"
+                    href={areaLink}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View approximate site area ↗
+                  </a>
+                )}
                 <a
                   className="button"
                   href="/downloads/Shubh_Mangal_Full_Layout.kml"
@@ -1571,9 +1594,10 @@ function App() {
                 My location asks for browser permission only when pressed. The
                 reported point and accuracy stay in this view's memory, are
                 cleared when hidden or closed, and are not added to enquiries,
-                application requests, URLs, logs or browser storage. Map viewport
-                requests to Google are subject to that provider's privacy terms.
-                This feature does not identify the parcel you are standing on.
+                application requests, URLs, logs or browser storage. Map
+                viewport requests to Google are subject to that provider's
+                privacy terms. This feature does not identify the parcel you are
+                standing on.
               </p>
               <p>
                 The owner must set a retention period, privacy contact and
