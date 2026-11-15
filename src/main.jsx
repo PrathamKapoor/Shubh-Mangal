@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import { createRoot } from "react-dom/client";
 import { filterPlots, areaLabel, approvedBlocks } from "../shared/domain.mjs";
+import { createSiteConfig } from "../shared/site-config.mjs";
 import { api, loadStored, loadPublicInventory } from "./services/api";
 import {
   ownerAmenityReferences,
@@ -85,6 +86,7 @@ function App() {
     [inventory, setInventory] = useState([]),
     [mode, setMode] = useState("offline"),
     [content, setContent] = useState([]),
+    [siteConfig, setSiteConfig] = useState(() => createSiteConfig()),
     [siteExtent, setSiteExtent] = useState(null),
     [stale, setStale] = useState(false),
     [publicReady, setPublicReady] = useState(false);
@@ -216,8 +218,8 @@ function App() {
     return () => clearTimeout(id);
   }, [notice]);
   useEffect(() => {
-    document.title = `${exploring ? "Plot explorer" : path === "/" ? "A thoughtful beginning" : path.slice(1).replace("-", " ")} · Shubh Mangal Residency`;
-  }, [path]);
+    document.title = `${exploring ? "Plot explorer" : path === "/" ? "A thoughtful beginning" : path.slice(1).replace("-", " ")} · ${siteConfig.name}`;
+  }, [path, exploring, siteConfig.name]);
   useEffect(() => {
     if (!exploring && path !== "/contact" && path !== "/compare") return;
     const controller = new AbortController();
@@ -263,6 +265,7 @@ function App() {
           loadPublicInventory(signal),
         ]);
         if (active && request === current) {
+          setSiteConfig(createSiteConfig(project.siteConfig));
           setMode(project.mode);
           setContent(project.items);
           setSiteExtent(project.geographicBounds || null);
@@ -457,7 +460,7 @@ function App() {
         Skip to content
       </a>
       <header className="top">
-        <a href="/" className="brand" aria-label="Shubh Mangal Residency home">
+        <a href="/" className="brand" aria-label={`${siteConfig.name} home`}>
           <span className="brand-mark">
             शु<span>SM</span>
           </span>
@@ -1330,7 +1333,7 @@ function App() {
                   </a>{" "}
                   ·{" "}
                   <a
-                    href={`https://wa.me/${project.contactPhone.replace(/\D/g, "")}?text=${encodeURIComponent(`Hello, I would like to enquire about Shubh Mangal Residency.${plot ? ` Plot ${plot.label}: ${location.origin}${plot.approved ? `/plots/${encodeURIComponent(plot.id)}` : `/explore?plot=${encodeURIComponent(plot.id)}`}` : ""}`)}`}
+                    href={`https://wa.me/${project.contactPhone.replace(/\D/g, "")}?text=${encodeURIComponent(`Hello, I would like to enquire about ${siteConfig.name}.${plot ? ` Plot ${plot.label}: ${location.origin}${plot.approved ? `/plots/${encodeURIComponent(plot.id)}` : `/explore?plot=${encodeURIComponent(plot.id)}`}` : ""}`)}`}
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -1683,7 +1686,9 @@ function App() {
           <a href="/privacy">Privacy</a>
           <a href="/admin">Owner workspace</a>
         </nav>
-        <small>© {new Date().getFullYear()} Shubh Mangal Residency</small>
+        <small>
+          © {new Date().getFullYear()} {siteConfig.name}
+        </small>
       </footer>
       <div role="status" aria-live="polite" className={notice ? "toast" : ""}>
         {notice}

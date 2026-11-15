@@ -1,5 +1,7 @@
 # Local development and production operations
 
+`SITE_NAME` optionally changes the public project name returned by the API, HTML plot titles and selected client text. It does not replace the source geometry, artwork, wordmark, demo amenities, seed or geographic limits; setting this alone does not configure a different development. Omit it to retain the Shubh Mangal default. Full single-site portability remains unfinished.
+
 ## Prerequisites and local workflow
 
 Use Node 24.16+ (tested 24.21.0), npm, and a normal local filesystem. No credentials are bundled. PostgreSQL is optional locally: PGlite runs actual PostgreSQL in-process and persists under `.local/database`. It is an explicit development substitute, not a shared/multi-process production service. Production refuses to start without DATABASE_URL.
@@ -57,6 +59,8 @@ PLAYWRIGHT_CHROMIUM_EXECUTABLE=/opt/google/chrome/chrome npm run test:e2e
 ```
 
 E2E starts its own in-memory API at 3002 and Vite at 5181, with synthetic accounts only. Those ports must be free. Tests never seed a user into the development or production database. Physical iOS/Android hardware and Safari have not been tested here.
+
+CI also runs `scripts/postgres-check.mjs` against a disposable PostgreSQL 16 service using the application's pooled adapter. It exercises migrations, transaction rollback, API persistence, publication, and a synthetic custom-format database dump and restore with separately copied media. The check requires `pg_dump` and `pg_restore`, explicit `ALLOW_DISPOSABLE_POSTGRES=true` and a loopback `TEST_DATABASE_URL` naming a `shubh_test_` control database; it creates and removes separately generated databases and temporary files. PostgreSQL environment overrides (`PG*`) are rejected. Use only an isolated server owned for the test, never a client or production server. This synthetic drill does not validate a provider's backups or production recovery procedure.
 
 ## Production target: Node service + PostgreSQL + HTTPS reverse proxy
 

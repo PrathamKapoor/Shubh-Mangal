@@ -47,6 +47,7 @@ import {
 import { stageImage, mediaFile } from "./media.mjs";
 import { publicGeometry } from "./public-geometry.mjs";
 import { reviewedVisitorAccess } from "../shared/site-access.mjs";
+import { createSiteConfig, plotPageTitle } from "../shared/site-config.mjs";
 const uuid = z.uuid();
 const json = (v) => JSON.stringify(v);
 export function createApp(
@@ -59,8 +60,12 @@ export function createApp(
     logging = true,
     googleMaps = process.env.GOOGLE_MAPS_ENABLED === "true",
     mediaDirectory = process.env.MEDIA_DIRECTORY || ".local/media",
+    siteConfig = process.env.SITE_NAME === undefined
+      ? undefined
+      : { name: process.env.SITE_NAME },
   } = {},
 ) {
+  const publicSiteConfig = createSiteConfig(siteConfig);
   const app = express();
   app.disable("x-powered-by");
   app.use((req, res, next) => {
@@ -255,6 +260,7 @@ export function createApp(
     res.json({
       mode: demo ? "local-demo" : "connected",
       geographicBounds: sourceLayout.geographicBounds,
+      siteConfig: publicSiteConfig,
       items: items
         .filter(
           (item) =>
@@ -1827,10 +1833,7 @@ export function createApp(
       if (req.path.startsWith("/plots/")) {
         const id = req.path.slice(7),
           p = uuid.safeParse(id).success ? await getPlot(db, id) : null;
-        const title =
-          p?.publication === "published"
-            ? `Plot ${p.number} · ${p.block} · Shubh Mangal Residency`
-            : "Plot unavailable · Shubh Mangal Residency";
+        const title = plotPageTitle(publicSiteConfig, p);
         if (!p || p.publication !== "published") res.status(404);
         html = html
           .replace(/<title>[^<]*<\/title>/, `<title>${escape(title)}</title>`)
