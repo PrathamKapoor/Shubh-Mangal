@@ -315,6 +315,7 @@ export default function Admin() {
     [tab, setTab] = useState("inventory"),
     [data, setData] = useState({}),
     [overview, setOverview] = useState({}),
+    [overviewError, setOverviewError] = useState(""),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(false),
@@ -356,6 +357,19 @@ export default function Admin() {
     requestController.current?.abort();
     const controller = new AbortController();
     requestController.current = controller;
+    setOverviewError("");
+    // Overview is supplementary: a failed or stalled summary must not hide
+    // the independently loaded records in the selected owner workspace.
+    void api("/admin/overview", { signal: controller.signal })
+      .then((summary) => {
+        if (!controller.signal.aborted) setOverview(summary.counts);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setOverview({});
+          setOverviewError("Overview unavailable. Records can still be used.");
+        }
+      });
     try {
       const params = new URLSearchParams();
       if (["leads", "visits", "audit"].includes(tab)) {
@@ -364,16 +378,12 @@ export default function Admin() {
         if (tab === "audit" && auditFilter) params.set("entity", auditFilter);
       }
       const path = `${endpoint[tab]}${params.size ? `?${params}` : ""}`;
-      const [result, summary] = await Promise.all([
-        api(path, { signal: controller.signal }),
-        api("/admin/overview", { signal: controller.signal }),
-      ]);
+      const result = await api(path, { signal: controller.signal });
       if (!controller.signal.aborted) {
         setData(result);
-        setOverview(summary.counts);
       }
     } catch (e) {
-      if (e.name !== "AbortError") setError(e.message);
+      if (!controller.signal.aborted && e.name !== "AbortError") setError(e.message);
     }
   }
   useEffect(() => {
@@ -552,6 +562,9 @@ export default function Admin() {
         <p className="warning" role="alert">
           {error} <button onClick={refresh}>Reload records</button>
         </p>
+      )}
+      {overviewError && (
+        <p className="warning" role="alert">{overviewError}</p>
       )}
       {notice && (
         <p className="success" role="status">
