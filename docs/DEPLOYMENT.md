@@ -2,6 +2,8 @@
 
 `SITE_NAME` optionally changes the public project name returned by the API, HTML plot titles and selected client text. It does not replace the source geometry, artwork, wordmark, demo amenities, seed or geographic limits; setting this alone does not configure a different development. Omit it to retain the Shubh Mangal default. Full single-site portability remains unfinished.
 
+The opt-in `scripts/postgres-check.mjs` requires `ALLOW_DISPOSABLE_POSTGRES=true`, an explicitly supplied loopback `TEST_DATABASE_URL` whose database begins `shubh_test_`, and matching `pg_dump`/`pg_restore` on PATH. It creates and removes only its own generated test databases. `TEST_POSTGRES_MAJOR` defaults to 16 and accepts 16 or 18. A disposable PostgreSQL 18.6 run passed migrations, pooled rollback and version conflict, synthetic public geometry, and a coordinated paused-writes database plus media dump/restore with restored app checks. PostgreSQL 16 CI execution and production DB-role privilege checks remain pending. Keep production writes paused across both database and media snapshots, record the snapshot boundary and verify restore to a separate target before relying on a backup.
+
 ## Prerequisites and local workflow
 
 Use Node 24.16+ (tested 24.21.0), npm, and a normal local filesystem. No credentials are bundled. PostgreSQL is optional locally: PGlite runs actual PostgreSQL in-process and persists under `.local/database`. It is an explicit development substitute, not a shared/multi-process production service. Production refuses to start without DATABASE_URL.
