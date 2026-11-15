@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { siteAccessSchema } from "../shared/site-access.mjs";
+import { structureSchema } from "../shared/structure.mjs";
 const s = z
   .string()
   .trim()
@@ -18,6 +19,7 @@ const asset = z
   );
 export const contentSchemas = {
   site_access: siteAccessSchema,
+  structure: structureSchema,
   presentation: z
     .object({
       source: s.min(5),

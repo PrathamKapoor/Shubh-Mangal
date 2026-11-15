@@ -3,6 +3,7 @@ import { can, roles, statuses, parseLength } from "../../shared/domain.mjs";
 import { api, downloadJSON } from "../services/api";
 import PresentationEditor from "./PresentationEditor";
 import FootprintReview from "./FootprintReview";
+import StructureFields from "./StructureFields";
 const MapPositionEditor = lazy(() => import("./MapPositionEditor"));
 function EvidenceEditor({
   initial,
@@ -404,7 +405,8 @@ export default function Admin() {
     setNotice("");
     try {
       const result = await fn();
-      setNotice(message);
+      const warnings = result?.structureAssessment?.warnings;
+      setNotice([message, ...(Array.isArray(warnings) ? warnings : [])].join(" "));
       if (refreshAfter) await refresh();
       return result;
     } catch (e) {
@@ -1813,6 +1815,15 @@ function ContentEditor({ item, run, mutate, user, busy }) {
     [imageFile, setImageFile] = useState(null),
     [showPicker, setShowPicker] = useState(false);
   const templates = {
+    structure: {
+      title: "",
+      footprint: { datum: "WGS84", outer: [], holes: [], source: "", sourceRevision: "" },
+      frame: { physicalAnchor: { lat: null, lon: null }, headingDegrees: null, modelAxes: "right-up-forward", worldAxes: "east-up-south", units: "metres", pivot: [0, 0, 0] },
+      height: null,
+      model: null,
+      verifiedAt: null,
+      customerVisible: false,
+    },
     site_access: {
       title: "Visitor entrance",
       routeAccess: null,
@@ -1965,9 +1976,16 @@ function ContentEditor({ item, run, mutate, user, busy }) {
             }} />
           </>
         )}
+        {kind === "structure" && <StructureFields value={draft} onChange={setDraft} />}
+        {kind === "structure" && item.published && can(user.role, "publish") && (
+          <button type="button" disabled={busy} onClick={(event) => {
+            const reason = event.currentTarget.form.elements.reason.value;
+            run(() => mutate(`/admin/content/${id}/unpublish`, { expectedVersion: version, reason }), "Structure unpublished; the draft and history remain available.");
+          }}>Unpublish structure</button>
+        )}
         <div className="form-grid">
           {Object.entries(draft)
-            .filter(([key]) => key !== "footprint")
+            .filter(([key]) => key !== "footprint" && !(kind === "structure" && ["frame", "height", "model"].includes(key)))
             .map(([key, value]) =>
               [
                 "entrance",

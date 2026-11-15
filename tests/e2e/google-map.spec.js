@@ -173,6 +173,22 @@ test("published entrance footprint is selectable on the controlled Google layer"
   expect(await page.evaluate(() => window.accessChosen)).toBe(true);
 });
 
+test("published structure footprint is selectable on the controlled Google layer", async ({ page }) => {
+  test.skip(!providerEnabled, "Requires separate controlled-key environment.");
+  await mount(page);
+  await expect.poll(() => page.evaluate(() => typeof window.renderMap)).toBe("function");
+  await page.evaluate(() => window.renderMap({
+    structures: [{ id: "synthetic-building", kind: "structure", published: { title: "Synthetic building", footprint: { outer: [[74.909,24.467],[74.90915,24.467],[74.909,24.4671],[74.909,24.467]], holes: [] } } }],
+    onStructureSelect: (id) => { window.structureChosen = id; },
+  }));
+  await expect.poll(() => page.evaluate(() => window.mapAdapter.layers.some((layer) => layer.features.some((feature) => feature.getId() === "synthetic-building")))).toBe(true);
+  await page.evaluate(() => {
+    const layer = window.mapAdapter.layers.find((entry) => entry.features.some((feature) => feature.getId() === "synthetic-building"));
+    layer.click({ feature: layer.features[0] });
+  });
+  expect(await page.evaluate(() => window.structureChosen)).toBe("synthetic-building");
+});
+
 test("visitor location is intentional, shows metre uncertainty and never enters app requests or storage", async ({
   page,
   context,

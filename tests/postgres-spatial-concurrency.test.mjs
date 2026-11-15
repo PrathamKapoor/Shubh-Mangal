@@ -72,6 +72,38 @@ function instrument(db, hooks) {
   };
 }
 
+async function contend(setup, first, second, sendFirst, sendSecond) {
+  let firstRequest, secondRequest;
+  try {
+    firstRequest = sendFirst();
+    const firstPid = await bounded(Promise.race([
+      first.acquired.promise,
+      firstRequest.then((response) => { throw Error(`First endpoint completed with ${response.status} without acquiring SELECT pg_advisory_xact_lock(19483,11479)`); }),
+    ]), "First endpoint did not acquire the requested two-integer spatial lock");
+    secondRequest = sendSecond();
+    const secondPid = await bounded(Promise.race([
+      second.attempt.promise,
+      secondRequest.then((response) => { throw Error(`Second endpoint completed with ${response.status} without attempting the requested spatial lock`); }),
+    ]), "Second endpoint did not attempt the requested two-integer spatial lock");
+    assert.notEqual(firstPid, secondPid, "requests must use independent PostgreSQL connections");
+    let blocked = false;
+    for (let i = 0; i < 100; i++) {
+      const row = (await setup.query("SELECT $1::int = ANY(pg_blocking_pids($2::int)) AS blocked", [firstPid, secondPid])).rows[0];
+      if (row.blocked) { blocked = true; break; }
+      await delay(50);
+    }
+    assert.ok(blocked, "second endpoint must wait for the first transaction's advisory lock");
+  } finally {
+    first.release.resolve();
+    await Promise.allSettled([firstRequest, secondRequest].filter(Boolean));
+  }
+  return Promise.all([firstRequest, secondRequest]);
+}
+
+function contentionHooks(hold) {
+  return { attempt: deferred(), acquired: deferred(), release: deferred(), hold };
+}
+
 test("PostgreSQL spatial publication serializes both collision orders using the two-integer lock", { skip: !enabled, timeout: 120000 }, async () => {
   const config = validateDisposableTarget(process.env);
   const [{ default: pg }, { default: request }, { openDatabase, migrate }, { createApp }, { createUser }] = await Promise.all([
@@ -114,8 +146,8 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
       await setup.query("INSERT INTO plot_geometry(plot_id,draft_id,revision_id) VALUES($1,$2,$2)", [plotId, revision]);
       await setup.query("INSERT INTO content(id,kind,draft) VALUES('visitor-entrance','site_access',$1)", [JSON.stringify(entrance)]);
 
-      const first = { attempt: deferred(), acquired: deferred(), release: deferred(), hold: true };
-      const second = { attempt: deferred(), acquired: deferred(), release: deferred(), hold: false };
+      const first = contentionHooks(true);
+      const second = contentionHooks(false);
       const apps = [firstDb, secondDb].map((db, index) => createApp(instrument(db, index ? second : first), { origin, demo: false, production: false, googleMaps: false, logging: false }));
       const clients = [];
       for (const app of apps) {
@@ -132,31 +164,9 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
         return operation.set("Origin", origin).set("X-CSRF-Token", client.csrf).set("Idempotency-Key", keys[type]).then((response) => response);
       };
       const auditBefore = (await setup.query("SELECT count(*)::int AS n FROM audit_logs WHERE entity_id='visitor-entrance'")).rows[0].n;
-      let firstRequest, secondRequest;
-      try {
-        firstRequest = send(clients[0], winner);
-        const firstPid = await bounded(Promise.race([
-          first.acquired.promise,
-          firstRequest.then((response) => { throw Error(`First endpoint completed with ${response.status} without acquiring SELECT pg_advisory_xact_lock(19483,11479)`); }),
-        ]), "First endpoint did not acquire the requested two-integer spatial lock");
-        secondRequest = send(clients[1], winner === "entrance" ? "parcel" : "entrance");
-        const secondPid = await bounded(Promise.race([
-          second.attempt.promise,
-          secondRequest.then((response) => { throw Error(`Second endpoint completed with ${response.status} without attempting the requested spatial lock`); }),
-        ]), "Second endpoint did not attempt the requested two-integer spatial lock");
-        assert.notEqual(firstPid, secondPid, "requests must use independent PostgreSQL connections");
-        let blocked = false;
-        for (let i = 0; i < 100; i++) {
-          const row = (await setup.query("SELECT $1::int = ANY(pg_blocking_pids($2::int)) AS blocked", [firstPid, secondPid])).rows[0];
-          if (row.blocked) { blocked = true; break; }
-          await delay(50);
-        }
-        assert.ok(blocked, "second endpoint must wait for the first transaction's advisory lock");
-      } finally {
-        first.release.resolve();
-        await Promise.allSettled([firstRequest, secondRequest].filter(Boolean));
-      }
-      const [won, lost] = await Promise.all([firstRequest, secondRequest]);
+      const [won, lost] = await contend(setup, first, second,
+        () => send(clients[0], winner),
+        () => send(clients[1], winner === "entrance" ? "parcel" : "entrance"));
       assert.equal(won.status, 200, JSON.stringify(won.body));
       assert.equal(lost.status, 422, JSON.stringify(lost.body));
       assert.match(JSON.stringify(lost.body), new RegExp(plotId));
@@ -180,6 +190,86 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
       assert.equal(project.body.siteAccessStatus, winner === "entrance" ? "available" : "unavailable");
       assert.equal(project.body.items.some((item) => item.id === "visitor-entrance"), winner === "entrance");
       assert.equal(geometry.body.features.some((feature) => feature.id === plotId), winner === "parcel");
+    }
+
+    // Both drafts are stored before either publication. Their overlapping
+    // footprints compete only through the real authenticated content endpoint.
+    await setup.query("UPDATE plots SET publication='reviewed' WHERE publication='published'");
+    await setup.query("DELETE FROM content WHERE id='visitor-entrance'");
+    const [{ planToGeographic }, { default: layout }] = await Promise.all([
+      import("../shared/geography.mjs"),
+      import("../public/data/layout.json", { with: { type: "json" } }),
+    ]);
+    const structure = (title, x, y) => {
+      const point = ([px, py]) => {
+        const { lon, lat } = planToGeographic({ x: px, y: py }, layout);
+        return [lon, lat];
+      };
+      return {
+        title,
+        footprint: {
+          datum: "WGS84",
+          outer: [[x, y], [x + 8, y], [x + 8, y + 8], [x, y + 8], [x, y]].map(point),
+          holes: [], source: "Synthetic survey", sourceRevision: "fixture-1",
+        },
+        frame: {
+          physicalAnchor: planToGeographic({ x, y }, layout), headingDegrees: 90,
+          modelAxes: "right-up-forward", worldAxes: "east-up-south", units: "metres", pivot: [0, 0, 0],
+        },
+        height: null, model: null, verifiedAt: "2026-11-15T10:00:00Z", customerVisible: true,
+      };
+    };
+    for (const winningIndex of [0, 1]) {
+      // Previous structure rows are synthetic and no longer participate;
+      // retain their append-only audit history.
+      await setup.query("DELETE FROM content WHERE kind='structure'");
+      const ids = [`synthetic-building-a-${winningIndex}`, `synthetic-building-b-${winningIndex}`];
+      const drafts = [structure("Synthetic building A", 100, 100), structure("Synthetic building B", 104, 104)];
+      for (const [index, id] of ids.entries())
+        await setup.query("INSERT INTO content(id,kind,draft) VALUES($1,'structure',$2)", [id, JSON.stringify(drafts[index])]);
+      const before = (await setup.query("SELECT * FROM content WHERE id = ANY($1::text[]) ORDER BY id", [ids])).rows;
+      const first = contentionHooks(true), second = contentionHooks(false);
+      const apps = [firstDb, secondDb].map((db, index) => createApp(instrument(db, index ? second : first), { origin, demo: false, production: false, googleMaps: false, logging: false }));
+      const clients = [];
+      for (const app of apps) {
+        const agent = request.agent(app);
+        const login = await agent.post("/api/auth/login").set("Origin", origin).send({ email: "spatial-owner@example.invalid", password });
+        assert.equal(login.status, 200, JSON.stringify(login.body));
+        clients.push({ agent, csrf: login.body.csrf });
+      }
+      const keys = [randomUUID(), randomUUID()];
+      const send = (client, index) => client.agent.put(`/api/admin/content/${ids[index]}`)
+        .set("Origin", origin).set("X-CSRF-Token", client.csrf).set("Idempotency-Key", keys[index])
+        .send({ kind: "structure", data: drafts[index], expectedVersion: 1, publish: true, reason: "Synthetic competing structure publication" })
+        .then((response) => response);
+      const losingIndex = 1 - winningIndex;
+      const [won, lost] = await contend(setup, first, second,
+        () => send(clients[0], winningIndex), () => send(clients[1], losingIndex));
+      assert.equal(won.status, 200, JSON.stringify(won.body));
+      assert.equal(lost.status, 422, JSON.stringify(lost.body));
+      assert.match(JSON.stringify(lost.body), new RegExp(ids[winningIndex]));
+
+      const after = (await setup.query("SELECT * FROM content WHERE id = ANY($1::text[]) ORDER BY id", [ids])).rows;
+      const oldLoser = before.find((row) => row.id === ids[losingIndex]);
+      const newLoser = after.find((row) => row.id === ids[losingIndex]);
+      assert.deepEqual(newLoser, oldLoser, "failed publication must preserve the whole draft row");
+      const newWinner = after.find((row) => row.id === ids[winningIndex]);
+      assert.equal(newWinner.version, 2);
+      assert.deepEqual(newWinner.draft, drafts[winningIndex]);
+      assert.deepEqual(newWinner.published, drafts[winningIndex]);
+      const audits = (await setup.query("SELECT entity_id,action FROM audit_logs WHERE entity_id = ANY($1::text[])", [ids])).rows;
+      assert.deepEqual(audits, [{ entity_id: ids[winningIndex], action: "content.update" }]);
+      const savedKeys = (await setup.query("SELECT key FROM idempotency WHERE key = ANY($1::text[])", [keys])).rows;
+      assert.deepEqual(savedKeys, [{ key: keys[winningIndex] }]);
+      const project = await request(apps[0]).get("/api/public/project");
+      assert.equal(project.status, 200);
+      const structures = project.body.items.filter((item) => item.kind === "structure");
+      assert.deepEqual(structures.map((item) => item.id), [ids[winningIndex]]);
+      assert.deepEqual(structures[0].published, {
+        title: drafts[winningIndex].title,
+        footprint: { outer: drafts[winningIndex].footprint.outer, holes: [] },
+        frame: drafts[winningIndex].frame, height: null, model: null,
+      });
     }
   } finally {
     for (const pool of pools.reverse()) await pool.close();

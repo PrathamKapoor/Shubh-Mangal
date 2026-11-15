@@ -31,6 +31,7 @@ import {
   publicPlot,
 } from "./inventory.mjs";
 import { contentSchemas } from "./content.mjs";
+import { publicStructureSchema } from "../shared/structure.mjs";
 import { presentationPlacementValid } from "../shared/presentation.mjs";
 import {
   stageGeometry,
@@ -55,8 +56,8 @@ import { validateFootprint, assessFootprint } from "../shared/footprint.mjs";
 import { createSiteConfig, plotPageTitle } from "../shared/site-config.mjs";
 const uuid = z.uuid();
 const json = (v) => JSON.stringify(v);
-async function assessAccessFootprint(footprint, db, sourceLayout) {
-  const project = ([lon, lat]) => {
+function footprintProjector(sourceLayout) {
+  return ([lon, lat]) => {
     // The source layout's UTM zone is not a global projection.
     const [west, south, east] = sourceLayout.geographicBounds;
     if (
@@ -72,6 +73,9 @@ async function assessAccessFootprint(footprint, db, sourceLayout) {
     const { x, y } = projectFootprintPoint({ lon, lat }, sourceLayout);
     return [x, y];
   };
+}
+async function assessAccessFootprint(footprint, db, sourceLayout) {
+  const project = footprintProjector(sourceLayout);
   const projected = {
     outer: footprint.outer.map(project),
     holes: footprint.holes.map((r) => r.map(project)),
@@ -88,7 +92,8 @@ async function assessAccessFootprint(footprint, db, sourceLayout) {
     );
   const [x, y, w, h] = sourceLayout.viewBox;
   const current = await publicGeometry(db, sourceLayout);
-  if (current.features.length !== current.mappings.length)
+  const publishedCount = Number((await db.query("SELECT count(*) AS n FROM plots WHERE publication='published'")).rows[0].n);
+  if (current.features.length !== current.mappings.length || current.mappings.length !== publishedCount)
     throw new HttpError(422, "A published plot has no usable geometry; resolve it before reviewing the entrance footprint");
   const polygons = [];
   for (const feature of current.features) {
@@ -115,6 +120,48 @@ async function assessAccessFootprint(footprint, db, sourceLayout) {
     throw new HttpError(422, `Footprint overlaps published plot ${assessment.overlaps[0].id.split(":")[0]}`);
   assessment.warnings.push("Reviewed structure and road-clearance checks are not available; inspect those relationships before publication.");
   return assessment;
+}
+
+// Call under the spatial write lock for mutations. The same checks on reads
+// suppress invalid public projections without changing the stored record.
+async function assessStructure(data, id, db, layout) {
+  const footprint = { ...data.footprint, interactions: [] };
+  const plots = await assessAccessFootprint(footprint, db, layout);
+  const warnings = plots.contacts.map((contact) => `Contact with published plot ${contact.id.split(":")[0]}; clearance review is pending.`);
+  const project = footprintProjector(layout);
+  const anchor = project([data.frame.physicalAnchor.lon, data.frame.physicalAnchor.lat]);
+  const [x, y, w, h] = layout.viewBox;
+  if (anchor[0] < x || anchor[0] > x + w || anchor[1] < y || anchor[1] > y + h)
+    throw new HttpError(422, "Structure anchor is outside the source plan extent");
+  const projected = { outer: footprint.outer.map(project), holes: footprint.holes.map((ring) => ring.map(project)), interactions: [] };
+  const rows = (await db.query("SELECT id,kind,published FROM content WHERE published IS NOT NULL AND (kind='structure' OR kind='site_access') AND id<>$1", [id])).rows;
+  const polygons = [];
+  for (const row of rows) {
+    const value = row.published;
+    if (row.kind === "site_access" && !value?.footprint) {
+      warnings.push(`Published access ${row.id} has no footprint; clearance review is pending.`);
+      continue;
+    }
+    if (row.kind === "structure" && !contentSchemas.structure.safeParse(value).success)
+      throw new HttpError(422, `Published structure ${row.id} is invalid`);
+    if (row.kind === "site_access" && !contentSchemas.site_access.safeParse(value).success)
+      throw new HttpError(422, "Published access is invalid");
+    if (!value.footprint)
+      throw new HttpError(422, `Published ${row.kind} ${row.id} has no assessable footprint`);
+    try {
+      const polygon = { id: row.id, outer: value.footprint.outer.map(project), holes: value.footprint.holes.map((ring) => ring.map(project)) };
+      if (!validateFootprint({ ...polygon, interactions: [] }).valid) throw Error("invalid geometry");
+      polygons.push(polygon);
+    } catch {
+      throw new HttpError(422, `Published footprint ${row.id} is invalid`);
+    }
+  }
+  const assessment = assessFootprint(projected, { bounds: [x, y, x + w, y + h], polygons });
+  if (assessment.overlaps.length)
+    throw new HttpError(422, `Structure conflicts with published footprint ${assessment.overlaps[0].id}`);
+  for (const contact of assessment.contacts)
+    warnings.push(`Contact with published footprint ${contact.id}; clearance review is pending.`);
+  return { warnings };
 }
 export function createApp(
   db,
@@ -294,12 +341,24 @@ export function createApp(
           );
         return cached.response;
       }
-      const result = await fn(tx);
+      let result = await fn(tx);
       if (scope.startsWith("plot:") && req.body.publication === "published") {
         const items = (await tx.query("SELECT id,kind,published FROM content WHERE id='visitor-entrance' AND published IS NOT NULL")).rows;
         const access = reviewedVisitorAccess(items);
         if (access?.footprint)
           await assessAccessFootprint(access.footprint, tx, selectedLayout);
+      }
+      if ((scope.startsWith("plot:") && req.body.publication === "published") ||
+          (scope.startsWith("content:") && req.body.kind === "site_access" && req.body.publish)) {
+        const structures = (await tx.query("SELECT id,published FROM content WHERE kind='structure' AND published IS NOT NULL")).rows;
+        const warnings = [];
+        for (const item of structures) {
+          const parsed = contentSchemas.structure.safeParse(item.published);
+          if (!parsed.success) throw new HttpError(422, `Published structure ${item.id} is invalid`);
+          const assessment = await assessStructure(parsed.data, item.id, tx, selectedLayout);
+          warnings.push(...assessment.warnings.map((warning) => `${item.id}: ${warning}`));
+        }
+        if (warnings.length) result = { ...result, structureAssessment: { warnings } };
       }
       await tx.query(
         "INSERT INTO idempotency(scope,key,request_hash,response) VALUES($1,$2,$3,$4)",
@@ -329,6 +388,15 @@ export function createApp(
       )
     ).rows;
     const access = reviewedVisitorAccess(items);
+    const publicStructures = new Set();
+    for (const item of items.filter((entry) => entry.kind === "structure")) {
+      const parsed = contentSchemas.structure.safeParse(item.published);
+      if (!parsed.success || !parsed.data.verifiedAt || !parsed.data.customerVisible) continue;
+      try {
+        await assessStructure(parsed.data, item.id, db, selectedLayout);
+        publicStructures.add(item.id);
+      } catch { /* Keep invalid or conflicting structures private. */ }
+    }
     let siteAccessStatus = access ? "available" : "unavailable";
     if (access?.footprint) {
       try {
@@ -359,11 +427,20 @@ export function createApp(
           (item) =>
             (item.kind !== "amenity" ||
               item.published.customerVisible !== false) &&
+            (item.kind !== "structure" || publicStructures.has(item.id)) &&
             (item.kind !== "site_access" ||
               (siteAccessStatus === "available" && Boolean(reviewedVisitorAccess([item])))),
         )
         .map((item) =>
-          item.kind === "site_access"
+          item.kind === "structure"
+            ? { id: item.id, kind: item.kind, published: publicStructureSchema.parse({
+                title: item.published.title,
+                footprint: { outer: item.published.footprint.outer, holes: item.published.footprint.holes },
+                frame: item.published.frame,
+                height: item.published.height ? { metres: item.published.height.metres } : null,
+                model: null,
+              }) }
+            : item.kind === "site_access"
             ? {
                 ...item,
                 published: {
@@ -1228,6 +1305,27 @@ export function createApp(
       );
     },
   );
+  app.post("/api/admin/content/:id/unpublish", auth("publish"), async (req, res) => {
+    if (!/^[a-z0-9-]{1,80}$/.test(req.params.id))
+      throw new HttpError(422, "Use a short lowercase content ID");
+    const body = z.object({ expectedVersion: z.number().int().positive(), reason }).strict().parse(req.body);
+    res.json(await idempotent(req, `content:${req.user.id}:${req.params.id}`, async (tx) => {
+      const old = (await tx.query("SELECT * FROM content WHERE id=$1", [req.params.id])).rows[0];
+      if (!old || old.kind !== "structure")
+        throw new HttpError(404, "Structure not found");
+      if (old.version !== body.expectedVersion)
+        throw new HttpError(409, "Content changed; reload it");
+      if (old.published === null)
+        throw new HttpError(409, "Structure is not published");
+      const updated = (await tx.query(
+        "UPDATE content SET published=NULL,version=version+1,updated_at=now() WHERE id=$1 AND kind='structure' AND version=$2 AND published IS NOT NULL RETURNING *",
+        [req.params.id, body.expectedVersion],
+      )).rows[0];
+      if (!updated) throw new HttpError(409, "Content changed; reload it");
+      await audit(tx, req.user, "structure.unpublish", req.params.id, old, updated, body.reason);
+      return updated;
+    }));
+  });
   app.put("/api/admin/content/:id", auth("content"), async (req, res) => {
     const body = z
       .object({
@@ -1238,6 +1336,7 @@ export function createApp(
           "nearby",
           "presentation",
           "site_access",
+          "structure",
         ]),
         data: z.unknown(),
         expectedVersion: z.number().int().min(0),
@@ -1295,6 +1394,8 @@ export function createApp(
       );
     if (body.publish) {
       requirePermission(req.user, "publish");
+      if (body.kind === "structure" && data.model !== null)
+        throw new HttpError(422, "Model publication is unavailable until asset binding and correspondence are supported");
       if (
         body.kind === "site_access" &&
         !reviewedVisitorAccess([
@@ -1323,6 +1424,12 @@ export function createApp(
             throw new HttpError(409, "Content changed; reload it");
           if (old && old.kind !== body.kind)
             throw new HttpError(422, "Content kind cannot change");
+          let structureAssessment;
+          if (body.kind === "structure") {
+            if (body.publish && (!old || !(await tx.query("SELECT $1::jsonb = $2::jsonb AS same", [json(old.draft), json(data)])).rows[0].same))
+              throw new HttpError(422, "Save the structure draft before reviewing and publishing it");
+            structureAssessment = await assessStructure(data, req.params.id, tx, selectedLayout);
+          }
           if (body.kind === "site_access" && data.footprint && body.publish)
             await assessAccessFootprint(data.footprint, tx, selectedLayout);
           if (
@@ -1388,7 +1495,7 @@ export function createApp(
                   json(data),
                   body.publish
                     ? json(data)
-                    : body.kind === "presentation" && old.published
+                    : (body.kind === "presentation" || body.kind === "structure") && old.published
                       ? json(old.published)
                       : null,
                   req.params.id,
@@ -1415,7 +1522,7 @@ export function createApp(
             r.rows[0],
             body.reason,
           );
-          return r.rows[0];
+          return structureAssessment ? { ...r.rows[0], structureAssessment } : r.rows[0];
         },
       ),
     );

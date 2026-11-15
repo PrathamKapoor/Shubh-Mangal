@@ -303,6 +303,10 @@ function App() {
     return [...inventory, ...data.plots.filter((p) => !mapped.has(p.id))];
   }, [data, inventory, mode]);
   const blocks = useMemo(() => approvedBlocks(plots), [plots]);
+  const mapStructures = useMemo(
+    () => stale ? [] : content.filter((item) => item.kind === "structure"),
+    [content, stale],
+  );
   const mapAmenities = useMemo(() => {
     const published = content
       .filter(
@@ -1236,6 +1240,7 @@ function App() {
                           language={language}
                           stale={stale}
                           visitorAccess={visitorAccess}
+                          structures={mapStructures}
                         />
                       </div>
                     </Suspense>

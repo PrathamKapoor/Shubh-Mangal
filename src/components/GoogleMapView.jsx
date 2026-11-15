@@ -102,6 +102,8 @@ export default function GoogleMapView({
   stale = false,
   visitorAccess = null,
   onAccessSelect,
+  structures = [],
+  onStructureSelect,
 }) {
   const text = copy[hindi ? "hi" : "en"];
   const key = import.meta.env.VITE_GOOGLE_MAPS_KEY;
@@ -228,6 +230,19 @@ export default function GoogleMapView({
       layer.setMap(null);
     };
   }, [ready, visitorAccess, onAccessSelect]);
+
+  useEffect(() => {
+    if (!ready || !structures.length) return;
+    const layer = new window.google.maps.Data();
+    layer.addGeoJson({ type: "FeatureCollection", features: structures.map((item) => ({
+      type: "Feature", id: item.id, properties: { featureType: "structure" },
+      geometry: { type: "Polygon", coordinates: [item.published.footprint.outer, ...item.published.footprint.holes] },
+    })) });
+    layer.setStyle({ clickable: true, fillColor: "#66879c", fillOpacity: 0.45, strokeColor: "#33596f", zIndex: 4 });
+    const click = layer.addListener("click", (event) => onStructureSelect?.(event.feature.getId()));
+    layer.setMap(mapRef.current);
+    return () => { click?.remove(); clearLayer(layer); layer.setMap(null); };
+  }, [ready, structures, onStructureSelect]);
 
   useEffect(() => {
     if (!enabled || boundsKey === "null") return;

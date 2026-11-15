@@ -143,6 +143,7 @@ export default function MapCanvas({
   language = "en",
   stale = false,
   visitorAccess = null,
+  structures = [],
 }) {
   const hi = language === "hi";
   const svg = useRef(),
@@ -163,6 +164,7 @@ export default function MapCanvas({
     [expanded, setExpanded] = useState(false),
     [activeAmenity, setActiveAmenity] = useState(null),
     [accessSelected, setAccessSelected] = useState(false),
+    [selectedStructure, setSelectedStructure] = useState(null),
     [planImageStatus, setPlanImageStatus] = useState("loading");
   const accessPath = useMemo(() => {
     const footprint = visitorAccess?.footprint;
@@ -178,6 +180,18 @@ export default function MapCanvas({
       return null;
     }
   }, [visitorAccess, data]);
+  const structurePaths = useMemo(() => structures.flatMap((item) => {
+    try {
+      const footprint = item.published.footprint;
+      const path = [footprint.outer, ...footprint.holes].map((ring) => ring.map(([lon, lat], index) => {
+        const point = geographicToPlan({ lat, lon }, data);
+        return `${index ? "L" : "M"}${point.x} ${point.y}`;
+      }).join(" ") + " Z").join(" ");
+      return [{ id: item.id, title: item.published.title, height: item.published.height?.metres ?? null, path }];
+    } catch {
+      return [];
+    }
+  }), [structures, data]);
   const plots = useMemo(() => {
     if (mapMode !== "colony" && mapMode !== "3d") return sourcePlots;
     const placements = new Map(
@@ -901,6 +915,12 @@ export default function MapCanvas({
             {hi ? "समीक्षित प्रवेश स्थल" : "Reviewed visitor entrance"}
           </button>
           {accessSelected && <p>{visitorAccess.title} · {hi ? "प्रकाशित भौतिक सीमा; रास्ते का बिंदु अलग हो सकता है।" : "Published physical footprint; the route-access point may differ."}</p>}
+        </div>
+      )}
+      {structurePaths.length > 0 && ["plan", "google", "3d"].includes(mapMode) && (
+        <div aria-label={hi ? "प्रकाशित संरचनाएँ" : "Published structures"}>
+          {structurePaths.map((item) => <button type="button" key={item.id} onClick={() => setSelectedStructure(item.id)} aria-pressed={selectedStructure === item.id}>{item.title}</button>)}
+          {selectedStructure && structurePaths.filter((item) => item.id === selectedStructure).map((item) => <p key={item.id}>{hi ? "प्रकाशित संरचना की सीमा।" : "Published structure footprint."} {item.height === null ? (hi ? "ऊँचाई अज्ञात है।" : "Height is unknown.") : (hi ? `समीक्षित ऊँचाई: ${item.height} मीटर।` : `Reviewed height: ${item.height} m.`)}</p>)}
         </div>
       )}
       <div className="map-area">
@@ -1943,6 +1963,7 @@ export default function MapCanvas({
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => { event.stopPropagation(); setAccessSelected(true); }} />
           )}
+          {mapMode === "plan" && structurePaths.map((item) => <path key={item.id} d={item.path} fill="#66879c" fillOpacity=".45" fillRule="evenodd" stroke="#33596f" strokeWidth={2 / scale} data-structure-id={item.id} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setSelectedStructure(item.id); }} />)}
           {visibleLabels.map((p) => (
             <text
               className="plot-label"
@@ -2026,6 +2047,8 @@ export default function MapCanvas({
                   stale={stale}
                   visitorAccess={visitorAccess}
                   onAccessSelect={() => setAccessSelected(true)}
+                  structures={structures}
+                  onStructureSelect={setSelectedStructure}
                   onExit={() => setMapMode("plan")}
                 />
               </Suspense>
@@ -2056,6 +2079,7 @@ export default function MapCanvas({
                   onAmenitySelect={openAmenity}
                   visitorAccess={visitorAccess}
                   onAccessSelect={() => setAccessSelected(true)}
+                  structures={structures}
                   onExit={() => setMapMode("colony")}
                   hindi={hi}
                 />
