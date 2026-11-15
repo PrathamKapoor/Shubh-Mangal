@@ -11,7 +11,7 @@ test("local PostgreSQL database survives reopen and physical backup/restore pres
     dir = join(root, "original");
   let db;
   try {
-    db = await openDatabase({ dir });
+    db = await openDatabase({ url: null, dir });
     await migrate(db);
     const id = randomUUID();
     await db.query("INSERT INTO enquiries(id,data) VALUES($1,$2)", [

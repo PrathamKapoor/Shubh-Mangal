@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.19.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - run: npx --no-install playwright install --with-deps chromium
+      - run: npm run test:e2e -- --forbid-only
+
+  postgres:
+    name: Disposable PostgreSQL 16 integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: shubh_fixture
+          POSTGRES_PASSWORD: synthetic-ci-password
+          POSTGRES_DB: shubh_test_control
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U shubh_fixture -d shubh_test_control"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.19.0"
+          cache: npm
+      - run: npm ci
+      # NOT RUN locally: docker/psql unavailable. CI execution is still unverified.
+      # This job does NOT validate pg_dump/pg_restore or media recovery.
+      - name: Check fresh install, historical upgrade, persistence and public geometry
+        run: node scripts/postgres-check.mjs
+        env:
+          NODE_ENV: test
+          ALLOW_DISPOSABLE_POSTGRES: "true"
+          TEST_DATABASE_URL: postgresql://shubh_fixture:synthetic-ci-password@127.0.0.1:5432/shubh_test_control

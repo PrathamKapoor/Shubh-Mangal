@@ -52,7 +52,7 @@ async function change(role, path, body, method = "post", key = randomUUID()) {
     .send(body);
 }
 before(async () => {
-  db = await openDatabase({ dir: ":memory:" });
+  db = await openDatabase({ url: null, dir: ":memory:" });
   await migrate(db);
   await migrate(db);
   await seed(db);

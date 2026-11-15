@@ -10,7 +10,7 @@ if (
   process.env.NODE_ENV === "production"
 )
   throw Error("This fixture server is only for isolated E2E tests");
-const db = await openDatabase({ dir: ":memory:" });
+const db = await openDatabase({ url: null, dir: ":memory:" });
 const mediaDirectory = await mkdtemp(join(tmpdir(), "shubh-e2e-media-"));
 await migrate(db);
 await seed(db);
