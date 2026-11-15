@@ -12,6 +12,8 @@ if (
   process.env.NODE_ENV === "production"
 )
   throw Error("This fixture server is only for isolated E2E tests");
+const fixtureOrigin = process.env.E2E_FIXTURE_ORIGIN || "http://127.0.0.1:5181";
+const fixturePort = Number(process.env.E2E_FIXTURE_PORT || 3002);
 const db = await openDatabase({ url: null, dir: ":memory:" });
 const mediaDirectory = await mkdtemp(join(tmpdir(), "shubh-e2e-media-"));
 await migrate(db);
@@ -24,12 +26,12 @@ await createUser(db, {
   role: "owner",
 });
 const server = createApp(db, {
-  origin: "http://127.0.0.1:5181",
+  origin: fixtureOrigin,
   logging: false,
   demo: true,
   mediaDirectory,
   sourceIdentity: buildIdentity(await loadSiteSource()).digest,
-}).listen(3002, "127.0.0.1");
+}).listen(fixturePort, "127.0.0.1");
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () =>
     server.close(async () => {

@@ -26,6 +26,20 @@ export default defineConfig({
   webServer: [
     {
       command: "node tests/e2e-server.mjs",
+      url: "http://127.0.0.1:3003/api/health",
+      env: { E2E_TEST_MODE: "true", E2E_FIXTURE_PORT: "3003", E2E_FIXTURE_ORIGIN: "http://127.0.0.1:5182" },
+      reuseExistingServer: false,
+      timeout: 60000,
+    },
+    {
+      command: "npm run dev -- --port 5182 --strictPort",
+      url: "http://127.0.0.1:5182",
+      env: { API_PROXY_TARGET: "http://127.0.0.1:3003" },
+      reuseExistingServer: false,
+      timeout: 60000,
+    },
+    {
+      command: "node tests/e2e-server.mjs",
       url: "http://127.0.0.1:3002/api/health",
       env: { E2E_TEST_MODE: "true" },
       reuseExistingServer: false,

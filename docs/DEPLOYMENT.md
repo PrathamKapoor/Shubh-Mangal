@@ -60,7 +60,7 @@ An existing supported Chromium can be used without another download:
 PLAYWRIGHT_CHROMIUM_EXECUTABLE=/opt/google/chrome/chrome npm run test:e2e
 ```
 
-E2E starts its own in-memory API at 3002 and Vite at 5181, with synthetic accounts only. Those ports must be free. Tests never seed a user into the development or production database. Physical iOS/Android hardware and Safari have not been tested here.
+E2E starts in-memory APIs at 3002 and 3003 and Vite at 5181 and 5182, with synthetic accounts only. Those ports must be free. The competing-editor cases use the second server to isolate login rate-limit state. Tests never seed a user into the development or production database. Physical iOS/Android hardware and Safari have not been tested here.
 
 CI also runs `scripts/postgres-check.mjs` against a disposable PostgreSQL 16 service using the application's pooled adapter. It exercises migrations, transaction rollback, API persistence, publication, and a synthetic custom-format database dump and restore with separately copied media. The check requires `pg_dump` and `pg_restore`, explicit `ALLOW_DISPOSABLE_POSTGRES=true` and a loopback `TEST_DATABASE_URL` naming a `shubh_test_` control database; it creates and removes separately generated databases and temporary files. PostgreSQL environment overrides (`PG*`) are rejected. Use only an isolated server owned for the test, never a client or production server. This synthetic drill does not validate a provider's backups or production recovery procedure.
 

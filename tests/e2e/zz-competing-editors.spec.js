@@ -16,7 +16,7 @@ async function setup(page,id,kind,data) {
   const old=list.items.find((item)=>item.id===id);
   const draft=old ? {...old.draft,title:"Initial synthetic revision"} : data;
   const put=async (version,publish)=> {
-    const response=await page.request.put(`/api/admin/content/${id}`,{headers:{Origin:"http://127.0.0.1:5181","X-CSRF-Token":session.csrf,"Idempotency-Key":randomUUID()},data:{kind,data:draft,expectedVersion:version,publish,reason:"Synthetic competing editor setup"}});
+    const response=await page.request.put(`/api/admin/content/${id}`,{headers:{Origin:"http://127.0.0.1:5182","X-CSRF-Token":session.csrf,"Idempotency-Key":randomUUID()},data:{kind,data:draft,expectedVersion:version,publish,reason:"Synthetic competing editor setup"}});
     expect(response.status(),await response.text()).toBe(200); return response.json();
   };
   const saved=await put(old?.version ?? 0,false); await put(saved.version,true);
@@ -41,8 +41,8 @@ async function publish(page,id,reason) {
 }
 for (const kind of ["structure","site_access"]) {
   test(`two owner contexts resolve a stale ${kind} edit without losing input`,async ({browser})=>{
-    const a=await browser.newContext({baseURL:"http://127.0.0.1:5181"});
-    const b=await browser.newContext({baseURL:"http://127.0.0.1:5181"});
+    const a=await browser.newContext({baseURL:"http://127.0.0.1:5182"});
+    const b=await browser.newContext({baseURL:"http://127.0.0.1:5182"});
     try {
       const pa=await a.newPage(), pb=await b.newPage(); await login(pa); await login(pb);
       const point=([x,y])=>{const p=planToGeographic({x,y},layout);return [p.lon,p.lat];};
