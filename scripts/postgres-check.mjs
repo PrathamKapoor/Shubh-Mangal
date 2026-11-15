@@ -353,6 +353,61 @@ export async function runPostgresCheck(env = process.env) {
         .status,
       200,
     );
+    // Procedural asset IDs are code-owned, not media uploads. Exercise the real
+    // authenticated publication path and preserve a private superseding draft.
+    const layout = JSON.parse(await readFile(new URL("../public/data/layout.json", import.meta.url), "utf8"));
+    const { geographicToPlan, planToGeographic } = await import("../shared/geography.mjs");
+    const point = (x,y) => { const value = planToGeographic({x,y},layout); return [value.lon,value.lat]; };
+    const buildingAnchor = geographicToPlan({lon:74.909,lat:24.467},layout);
+    const building = {
+      title:"Synthetic recovery building", footprint:{datum:"WGS84",outer:[[0,0],[8,0],[8,-5],[5,-5],[5,-8],[0,-8],[0,0]].map(([x,y])=>point(buildingAnchor.x+x,buildingAnchor.y+y)),holes:[],source:"Synthetic recovery survey",sourceRevision:"building-1"},
+      frame:{physicalAnchor:{lon:74.909,lat:24.467},headingDegrees:0,modelAxes:"right-up-forward",worldAxes:"east-up-south",units:"metres",pivot:[0,0,0]},
+      height:{metres:4,source:"Synthetic height",sourceRevision:"height-1"},
+      model:{assetId:"synthetic-building",revision:"v1",rights:"Synthetic fixture",correspondence:"Synthetic outline",dimensions:{width:8,depth:8,cutoutWidth:3,cutoutDepth:3,source:"Synthetic dimensions",sourceRevision:"dimensions-1"}},
+      verifiedAt:"2026-01-01T00:00:00Z",customerVisible:true,
+    };
+    const putContent = async (id,kind,data,expectedVersion,publish) => {
+      const response = await request(app).put(`/api/admin/content/${id}`)
+        .set("Origin",origin).set("Cookie",sessionCookie).set("X-CSRF-Token",login.body.csrf)
+        .set("Idempotency-Key",randomUUID()).send({kind,data,expectedVersion,publish,reason:"Synthetic model recovery review"});
+      assert.equal(response.status,200,JSON.stringify(response.body));
+      return response.body;
+    };
+    await putContent("synthetic-recovery-building","structure",building,0,false);
+    await putContent("synthetic-recovery-building","structure",building,1,true);
+    const buildingDraft = {...building,height:{...building.height,metres:6}};
+    await putContent("synthetic-recovery-building","structure",buildingDraft,2,false);
+    const gateAnchor=geographicToPlan({lon:74.908,lat:24.466},layout);
+    const entrance={title:"Synthetic recovery gate",routeAccess:{lon:74.908,lat:24.466},physicalAnchor:{lon:74.908,lat:24.466},headingDegrees:0,state:"existing",source:"Synthetic gate evidence",sourceRevision:"gate-1",verifiedAt:"2026-01-01T00:00:00Z",customerVisible:true};
+    await putContent("visitor-entrance","site_access",entrance,0,false);
+    const footprint={datum:"WGS84",source:"Synthetic gate survey",sourceRevision:"gate-1",outer:[[0,0],[8,0],[8,-2],[0,-2],[0,0]].map(([x,y])=>point(gateAnchor.x+x,gateAnchor.y+y)),holes:[],interactions:[]};
+    const staged=await request(app).put("/api/admin/content/visitor-entrance/footprint").set("Origin",origin).set("Cookie",sessionCookie).set("X-CSRF-Token",login.body.csrf).set("Idempotency-Key",randomUUID()).send({footprint,expectedVersion:1,reason:"Synthetic gate recovery staging"});
+    assert.equal(staged.status,200,JSON.stringify(staged.body));
+    const gate={...entrance,footprint,model:{assetId:"synthetic-gate",revision:"v1",pivot:[0,0,0],rights:"Synthetic fixture",correspondence:"Synthetic outline",dimensions:{width:8,depth:2,leftPostWidth:1,rightPostWidth:2,source:"Synthetic dimensions",sourceRevision:"gate-dimensions-1"},height:{metres:3,source:"Synthetic height",sourceRevision:"gate-height-1"}}};
+    await putContent("visitor-entrance","site_access",gate,2,false);
+    await putContent("visitor-entrance","site_access",gate,3,true);
+    const gateDraft={...gate,title:"Synthetic private gate draft"};
+    await putContent("visitor-entrance","site_access",gateDraft,4,false);
+    const recoveryModels = async (database) => (await database.query("SELECT id,kind,version,draft,published FROM content WHERE id IN ('synthetic-recovery-building','visitor-entrance') ORDER BY id")).rows;
+    const modelsBeforeBackup=await recoveryModels(db);
+    assert.equal(modelsBeforeBackup.length,2);
+    assert.equal(modelsBeforeBackup[0].published.model.assetId,"synthetic-building");
+    assert.equal(modelsBeforeBackup[0].draft.height.metres,6);
+    assert.equal(modelsBeforeBackup[1].published.model.assetId,"synthetic-gate");
+    assert.equal(modelsBeforeBackup[1].draft.title,"Synthetic private gate draft");
+    const assertPublicModels = async (targetApp) => {
+      const response=await request(targetApp).get("/api/public/project");
+      assert.equal(response.status,200);
+      const publishedBuilding=response.body.items.find((entry)=>entry.id==="synthetic-recovery-building");
+      const publishedGate=response.body.items.find((entry)=>entry.id==="visitor-entrance");
+      assert.equal(publishedBuilding?.published.model?.assetId,"synthetic-building");
+      assert.equal(publishedBuilding.published.height.metres,4);
+      assert.equal(publishedGate?.published.model?.assetId,"synthetic-gate");
+      assert.equal(publishedGate.published.title,"Synthetic recovery gate");
+      assert.doesNotMatch(JSON.stringify(response.body),/Synthetic private gate draft|Synthetic dimensions|Synthetic outline/);
+    };
+    await assertPublicModels(app);
+
     const recoverySnapshot = async (database) => ({
       plot: (
         await database.query(
@@ -482,6 +537,8 @@ export async function runPostgresCheck(env = process.env) {
       mediaDirectory: restoredMedia,
     });
     assert.deepEqual(await recoverySnapshot(restored), beforeBackup);
+    assert.deepEqual(await recoveryModels(restored), modelsBeforeBackup);
+    await assertPublicModels(restoredApp);
     const restoredGeometry = await request(restoredApp)
       .get("/api/public/geometry")
       .timeout({ response: 10000, deadline: 15000 });
@@ -523,6 +580,7 @@ export async function runPostgresCheck(env = process.env) {
     await restored.close();
     const sourceAfterRestore = await connect(`${prefix}_fresh`);
     assert.deepEqual(await recoverySnapshot(sourceAfterRestore), beforeBackup);
+    assert.deepEqual(await recoveryModels(sourceAfterRestore), modelsBeforeBackup);
     assert.equal(
       (
         await request(
@@ -542,7 +600,7 @@ export async function runPostgresCheck(env = process.env) {
       200,
     );
     await sourceAfterRestore.close();
-    completed.push("pg_dump/pg_restore and synthetic media recovery");
+    completed.push("pg_dump/pg_restore, synthetic media and published model recovery");
 
     stage = "historical-001-upgrade";
     const upgrade = await createDatabase(`${prefix}_upgrade`);

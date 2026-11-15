@@ -137,3 +137,6 @@ Logs contain request ID, method, matched route and status, not request bodies, p
 ## Scope limits
 
 No live deployment or paid provider was activated. No messaging, payment, holds, satellite tiles, 3D, panorama or drone assets are fabricated. Split/merge is a reviewed GeoJSON staging and ID-mapping workflow, not an in-browser survey CAD editor. English is the complete working interface; primary Hindi navigation, explorer and contact prompts are implemented, with remaining copy requiring an owner-reviewed translation pass. These are explicit follow-on operations, not claims of activated external services.
+
+
+The disposable PostgreSQL recovery drill also stages and publishes the built-in synthetic gate and building through authenticated API requests, saves private superseding drafts, and verifies their public and private records after database/media restore. Those procedural models are versioned application code, not external files; this check does not cover restoring an external model asset or a production provider backup. A local PostgreSQL 18.6 execution passed; PostgreSQL 16 CI has not been observed.
