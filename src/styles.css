@@ -2848,3 +2848,16 @@ td {
 .google-view-shell button {
   min-height: 44px;
 }
+.footprint-review { margin: 1.2rem 0; padding: 1rem; border: 1px solid #b6c8c3; border-radius: .6rem; background: #f6faf8; }
+.footprint-map { display: block; width: 100%; height: 360px; background: #edf2ef; border: 1px solid #afc0ba; }
+.footprint-area { fill: #dce8df; stroke: #c1cec5; stroke-width: .3; }
+.footprint-road { fill: #aeb9b6; }
+.footprint-parcel { fill: #f6f4ea; stroke: #869a91; stroke-width: .28; }
+.footprint-original { fill: #326bb12c; stroke: #24589b; stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
+.footprint-proposed { fill: #bb3f3438; stroke: #a32920; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.footprint-interaction { stroke: #6a3486; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.footprint-gate { fill: #6a3486; stroke: white; stroke-width: .4; }
+.footprint-legend { font-size: .85rem; }
+.footprint-ring { margin: .8rem 0; }
+.footprint-point { display: flex; gap: .5rem; align-items: end; flex-wrap: wrap; margin-bottom: .5rem; }
+.footprint-point label { flex: 1 1 15rem; }

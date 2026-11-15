@@ -2,6 +2,7 @@ import React, { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { can, roles, statuses, parseLength } from "../../shared/domain.mjs";
 import { api, downloadJSON } from "../services/api";
 import PresentationEditor from "./PresentationEditor";
+import FootprintReview from "./FootprintReview";
 const MapPositionEditor = lazy(() => import("./MapPositionEditor"));
 function EvidenceEditor({
   initial,
@@ -1795,11 +1796,7 @@ function ContentEditor({ item, run, mutate, user, busy }) {
             : item.draft,
     ),
     [id, setId] = useState(item.id),
-    [footprintText, setFootprintText] = useState(() =>
-      item.draft?.footprint
-        ? JSON.stringify(item.draft.footprint, null, 2)
-        : "",
-    ),
+    [version, setVersion] = useState(item.version),
     [imageFile, setImageFile] = useState(null),
     [showPicker, setShowPicker] = useState(false);
   const templates = {
@@ -1889,7 +1886,7 @@ function ContentEditor({ item, run, mutate, user, busy }) {
                 {
                   kind,
                   data: draft,
-                  expectedVersion: item.version,
+                  expectedVersion: version,
                   publish: f.get("publish") === "on",
                   reason: f.get("reason"),
                 },
@@ -1932,52 +1929,28 @@ function ContentEditor({ item, run, mutate, user, busy }) {
           </label>
         )}
         {kind === "site_access" && (
-          <div className="small">
-            Publication requires existing status, a reviewed source and
-            revision, a review date, and route access coordinates. Physical
-            anchor and heading are optional.
-            <p>
-              Footprint coordinates must be WGS84 [longitude, latitude], with a
-              separate source and sourceRevision. This pilot does not establish
-              a measured location. Road crossings require review.
-            </p>
-            <label>
-              Footprint JSON
-              <textarea
-                rows={8}
-                value={footprintText}
-                onChange={(e) => setFootprintText(e.target.value)}
-              />
-            </label>
-            <p>
-              Stage the footprint separately on a saved visitor access record.
-              Staging preserves the published record and uses the saved access
-              draft; save other edits separately first. Ordinary content saves
-              retain their existing unpublish behavior.
-            </p>
-            <button
-              type="button"
-              disabled={busy || item.id !== "visitor-entrance"}
-              onClick={(e) => {
-                const reason = e.currentTarget.form.elements.reason.value;
-                run(
-                  () =>
-                    mutate(
-                      "/admin/content/visitor-entrance/footprint",
-                      {
-                        footprint: JSON.parse(footprintText),
-                        expectedVersion: item.version,
-                        reason,
-                      },
-                      "PUT",
-                    ),
-                  "Footprint staged privately. Review road crossings and the saved draft before publishing.",
-                );
-              }}
-            >
-              Stage footprint
-            </button>
-          </div>
+          <>
+            <p className="small">Publication requires existing status, a reviewed source and revision, a review date, and route access coordinates. Physical anchor and heading are optional.</p>
+            <FootprintReview item={item} busy={busy} onStage={async (footprint, reason) => {
+              const result = await run(
+                async () => {
+                  try {
+                    return await mutate("/admin/content/visitor-entrance/footprint", { footprint, expectedVersion: version, reason }, "PUT");
+                  } catch (error) {
+                    if (error.status === 409) throw Error("The saved content changed elsewhere. Your local edits are still here; copy the footprint and any access edits before reloading to reconcile them.", { cause: error });
+                    throw error;
+                  }
+                },
+                "Footprint staged privately. Review road crossings and the saved draft before publishing.",
+                false,
+              );
+              if (result) {
+                setVersion(result.version);
+                setDraft((current) => ({ ...current, footprint: result.draft.footprint }));
+              }
+              return result;
+            }} />
+          </>
         )}
         <div className="form-grid">
           {Object.entries(draft)
