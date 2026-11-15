@@ -56,13 +56,13 @@ test("seed reads the selected source without importing legacy plots, provenance 
     await migrate(db);
     const source = createSiteSource(synthetic);
     const first = await seed(db, { source });
-    assert.equal(first.draftCells, 1);
+    assert.equal(first.draftCells, 4);
     assert.deepEqual(await seed(db, { source }), first);
     await assert.rejects(seed(db), /different source bundle/);
     const cells = (await db.query("SELECT id FROM draft_cells")).rows;
     assert.deepEqual(
-      cells.map((row) => row.id),
-      ["synthetic-plot-1"],
+      cells.map((row) => row.id).sort(),
+      ["synthetic-plot-1", "synthetic-plot-2", "synthetic-plot-3", "synthetic-plot-4"],
     );
     const revision = (
       await db.query("SELECT provenance FROM geometry_revisions")

@@ -169,8 +169,8 @@ test("normal database commands seed the explicitly selected bundle", async () =>
       await assertSourceDatabase(db, await loadSiteSource(fixture));
       const rows = (await db.query("SELECT id FROM draft_cells")).rows;
       assert.deepEqual(
-        rows.map((row) => row.id),
-        ["synthetic-plot-1"],
+        rows.map((row) => row.id).sort(),
+        ["synthetic-plot-1", "synthetic-plot-2", "synthetic-plot-3", "synthetic-plot-4"],
       );
     } finally {
       await db.close();

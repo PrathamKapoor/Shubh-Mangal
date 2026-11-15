@@ -14,5 +14,9 @@
     "pdf": null,
     "authority": "Synthetic test only"
   },
-  "amenities": []
+  "amenities": [
+    "Garden access lane",
+    "Community green",
+    "Indicative gateway"
+  ]
 }

@@ -1,15 +1,359 @@
 {
   "project": "Synthetic Harbour Gardens",
-  "origin": { "utmZone": "32N", "easting": 500000, "northingTop": 5538630 },
-  "geographicBounds": [8.99, 49.99, 9.01, 50.01],
-  "viewBox": [0, 0, 50, 60],
-  "warning": "Synthetic fixture; not a survey.",
+  "origin": {
+    "utmZone": "32N",
+    "easting": 500000,
+    "northingTop": 5538630,
+    "datum": "WGS84",
+    "units": "m"
+  },
+  "geographicBounds": [
+    8.99,
+    49.99,
+    9.01,
+    50.01
+  ],
+  "viewBox": [
+    0,
+    0,
+    50,
+    60
+  ],
+  "warning": "Synthetic illustrative geometry only; identities, dimensions and availability require review.",
   "plots": [
     {
       "id": "synthetic-plot-1",
       "label": "S1",
-      "path": "M0 0 L10 0 L10 8 L0 8 Z"
+      "block": "North Quay",
+      "path": "M0 0 L10 0 L10 8 L0 8 Z",
+      "center": [
+        5,
+        4
+      ],
+      "bounds": [
+        0,
+        0,
+        10,
+        8
+      ],
+      "areaSqMApprox": 80,
+      "edges": [
+        {
+          "a": [
+            0,
+            0
+          ],
+          "b": [
+            10,
+            0
+          ],
+          "metres": 10,
+          "feet": 32.81
+        },
+        {
+          "a": [
+            10,
+            0
+          ],
+          "b": [
+            10,
+            8
+          ],
+          "metres": 8,
+          "feet": 26.25
+        },
+        {
+          "a": [
+            10,
+            8
+          ],
+          "b": [
+            0,
+            8
+          ],
+          "metres": 10,
+          "feet": 32.81
+        },
+        {
+          "a": [
+            0,
+            8
+          ],
+          "b": [
+            0,
+            0
+          ],
+          "metres": 8,
+          "feet": 26.25
+        }
+      ],
+      "identityReviewRequired": false,
+      "labelCandidates": [
+        "S1"
+      ],
+      "status": "unverified",
+      "verifiedDimensions": null,
+      "geometrySource": "Synthetic illustrative geometry; owner review required"
+    },
+    {
+      "id": "synthetic-plot-2",
+      "label": "S2",
+      "block": "North Quay",
+      "path": "M10 0 L20 0 L20 8 L10 8 Z",
+      "center": [
+        15,
+        4
+      ],
+      "bounds": [
+        10,
+        0,
+        20,
+        8
+      ],
+      "areaSqMApprox": 80,
+      "edges": [
+        {
+          "a": [
+            10,
+            0
+          ],
+          "b": [
+            20,
+            0
+          ],
+          "metres": 10,
+          "feet": 32.81
+        },
+        {
+          "a": [
+            20,
+            0
+          ],
+          "b": [
+            20,
+            8
+          ],
+          "metres": 8,
+          "feet": 26.25
+        },
+        {
+          "a": [
+            20,
+            8
+          ],
+          "b": [
+            10,
+            8
+          ],
+          "metres": 10,
+          "feet": 32.81
+        },
+        {
+          "a": [
+            10,
+            8
+          ],
+          "b": [
+            10,
+            0
+          ],
+          "metres": 8,
+          "feet": 26.25
+        }
+      ],
+      "identityReviewRequired": false,
+      "labelCandidates": [
+        "S2"
+      ],
+      "status": "unverified",
+      "verifiedDimensions": null,
+      "geometrySource": "Synthetic illustrative geometry; owner review required"
+    },
+    {
+      "id": "synthetic-plot-3",
+      "label": "G1",
+      "block": "Garden Row",
+      "path": "M0 12 L10 12 L10 20 L0 20 Z",
+      "center": [
+        5,
+        16
+      ],
+      "bounds": [
+        0,
+        12,
+        10,
+        20
+      ],
+      "areaSqMApprox": 80,
+      "edges": [
+        {
+          "a": [
+            0,
+            12
+          ],
+          "b": [
+            10,
+            12
+          ],
+          "metres": 10,
+          "feet": 32.81
+        },
+        {
+          "a": [
+            10,
+            12
+          ],
+          "b": [
+            10,
+            20
+          ],
+          "metres": 8,
+          "feet": 26.25
+        },
+        {
+          "a": [
+            10,
+            20
+          ],
+          "b": [
+            0,
+            20
+          ],
+          "metres": 10,
+          "feet": 32.81
+        },
+        {
+          "a": [
+            0,
+            20
+          ],
+          "b": [
+            0,
+            12
+          ],
+          "metres": 8,
+          "feet": 26.25
+        }
+      ],
+      "identityReviewRequired": false,
+      "labelCandidates": [
+        "G1"
+      ],
+      "status": "unverified",
+      "verifiedDimensions": null,
+      "geometrySource": "Synthetic illustrative geometry; owner review required"
+    },
+    {
+      "id": "synthetic-plot-4",
+      "label": "G2",
+      "block": "Garden Row",
+      "path": "M10 12 L20 12 L20 20 L10 20 Z",
+      "center": [
+        15,
+        16
+      ],
+      "bounds": [
+        10,
+        12,
+        20,
+        20
+      ],
+      "areaSqMApprox": 80,
+      "edges": [
+        {
+          "a": [
+            10,
+            12
+          ],
+          "b": [
+            20,
+            12
+          ],
+          "metres": 10,
+          "feet": 32.81
+        },
+        {
+          "a": [
+            20,
+            12
+          ],
+          "b": [
+            20,
+            20
+          ],
+          "metres": 8,
+          "feet": 26.25
+        },
+        {
+          "a": [
+            20,
+            20
+          ],
+          "b": [
+            10,
+            20
+          ],
+          "metres": 10,
+          "feet": 32.81
+        },
+        {
+          "a": [
+            10,
+            20
+          ],
+          "b": [
+            10,
+            12
+          ],
+          "metres": 8,
+          "feet": 26.25
+        }
+      ],
+      "identityReviewRequired": false,
+      "labelCandidates": [
+        "G2"
+      ],
+      "status": "unverified",
+      "verifiedDimensions": null,
+      "geometrySource": "Synthetic illustrative geometry; owner review required"
     }
   ],
-  "areas": []
+  "areas": [
+    {
+      "id": "harbour-site",
+      "name": "Synthetic site boundary",
+      "kind": "site",
+      "path": "M0 0 L50 0 L50 60 L0 60 Z"
+    },
+    {
+      "id": "harbour-lane",
+      "name": "Garden access lane",
+      "kind": "road",
+      "path": "M0 8 L50 8 L50 12 L0 12 Z"
+    },
+    {
+      "id": "harbour-green",
+      "name": "Community green",
+      "kind": "amenity",
+      "path": "M25 16 L45 16 L45 35 L25 35 Z"
+    },
+    {
+      "id": "harbour-gateway",
+      "name": "Indicative gateway",
+      "kind": "amenity",
+      "path": "M0 22 L8 22 L8 28 L0 28 Z"
+    }
+  ],
+  "datum": "WGS84",
+  "units": "m",
+  "annotations": [
+    {
+      "text": "Synthetic garden lane",
+      "center": [
+        31,
+        10
+      ],
+      "path": "M25 9 L37 9 L37 11 L25 11 Z"
+    }
+  ]
 }

@@ -1,1 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 60"><path d="M0 0h10v8H0z" fill="none" stroke="black"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 60" role="img" aria-labelledby="title desc">
+  <title id="title">Synthetic Harbour Gardens schematic</title>
+  <desc id="desc">Four illustrative plots, a garden lane, a community green and an indicative gateway. Not a survey.</desc>
+  <rect width="50" height="60" fill="#f5f3e9" stroke="#2b5351" stroke-width="0.4"/>
+  <path d="M0 8 L50 8 L50 12 L0 12 Z" fill="#d9d5c9"/>
+  <path d="M25 16 L45 16 L45 35 L25 35 Z" fill="#bddebf" stroke="#598467" stroke-width="0.3"/>
+  <path d="M0 22 L8 22 L8 28 L0 28 Z" fill="#e5cda2" stroke="#8c714d" stroke-width="0.3"/>
+  <g fill="#e2edf0" stroke="#41656c" stroke-width="0.3">
+    <path d="M0 0 L10 0 L10 8 L0 8 Z"/><path d="M10 0 L20 0 L20 8 L10 8 Z"/>
+    <path d="M0 12 L10 12 L10 20 L0 20 Z"/><path d="M10 12 L20 12 L20 20 L10 20 Z"/>
+  </g>
+  <g fill="#244a51" font-family="sans-serif" font-size="2.2" text-anchor="middle">
+    <text x="5" y="4.8">S1</text><text x="15" y="4.8">S2</text>
+    <text x="5" y="16.8">G1</text><text x="15" y="16.8">G2</text>
+    <text x="35" y="26">Green</text>
+  </g>
+  <text x="25" y="55" text-anchor="middle" fill="#2b5351" font-family="sans-serif" font-size="1.8">SYNTHETIC • NOT A SURVEY</text>
+</svg>
