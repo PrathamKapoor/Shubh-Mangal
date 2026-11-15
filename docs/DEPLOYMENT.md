@@ -140,3 +140,5 @@ No live deployment or paid provider was activated. No messaging, payment, holds,
 
 
 The disposable PostgreSQL recovery drill also stages and publishes the built-in synthetic gate and building through authenticated API requests, saves private superseding drafts, and verifies their public and private records after database/media restore. Those procedural models are versioned application code, not external files; this check does not cover restoring an external model asset or a production provider backup. A local PostgreSQL 18.6 execution passed; PostgreSQL 16 CI has not been observed.
+
+The disposable PostgreSQL 18.6 restricted-role test also authenticated and published the synthetic building through the application using the runtime role, then verified the model through the restored application with that role. The migration-owner role applied migrations and restore; the runtime role remained unable to alter schema or audit history. This does not establish PostgreSQL 16 CI or production operator privileges.

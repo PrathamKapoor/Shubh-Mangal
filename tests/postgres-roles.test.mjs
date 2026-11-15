@@ -122,6 +122,26 @@ test("PostgreSQL migration owner, runtime permissions, history and recovery", { 
       await denied(`ALTER TABLE ${table} DISABLE TRIGGER ALL`);
       await assert.rejects(ownerClient.query(`TRUNCATE ${table}`), (error) => error.code === "P0001");
     }
+    // Run an actual model publication through the restricted runtime role.
+    const {createUser}=await import("../server/auth.mjs");
+    const {createApp}=await import("../server/app.mjs");
+    const {default:request}=await import("supertest");
+    const {geographicToPlan,planToGeographic}=await import("../shared/geography.mjs");
+    const layout=JSON.parse(await readFile(new URL("../public/data/layout.json",import.meta.url),"utf8"));
+    const loginPassword="Synthetic-role-model-82953!";
+    await createUser(dbAdapter(ownerClient),{email:"model-role@example.invalid",name:"Synthetic model owner",password:loginPassword,role:"owner"});
+    const origin="http://localhost:5173";
+    const runtimeServer=createApp(dbAdapter(app),{origin,demo:false,production:false,logging:false,googleMaps:false});
+    const session=request.agent(runtimeServer), login=await session.post("/api/auth/login").set("Origin",origin).send({email:"model-role@example.invalid",password:loginPassword});
+    assert.equal(login.status,200);
+    const anchor=geographicToPlan({lon:74.909,lat:24.467},layout);
+    const outer=[[0,0],[8,0],[8,-5],[5,-5],[5,-8],[0,-8],[0,0]].map(([x,y])=>{const p=planToGeographic({x:anchor.x+x,y:anchor.y+y},layout);return [p.lon,p.lat];});
+    const model={title:"Synthetic role building",footprint:{datum:"WGS84",outer,holes:[],source:"Synthetic role survey",sourceRevision:"one"},frame:{physicalAnchor:{lon:74.909,lat:24.467},headingDegrees:0,modelAxes:"right-up-forward",worldAxes:"east-up-south",units:"metres",pivot:[0,0,0]},height:{metres:4,source:"Synthetic height",sourceRevision:"one"},model:{assetId:"synthetic-building",revision:"v1",rights:"Synthetic fixture",correspondence:"Synthetic model outline",dimensions:{width:8,depth:8,cutoutWidth:3,cutoutDepth:3,source:"Synthetic dimensions",sourceRevision:"one"}},verifiedAt:"2026-01-01T00:00:00Z",customerVisible:true};
+    for (const [version,publish] of [[0,false],[1,true]]) {
+      const response=await session.put("/api/admin/content/synthetic-role-building").set("Origin",origin).set("X-CSRF-Token",login.body.csrf).set("Idempotency-Key",randomUUID()).send({kind:"structure",data:model,expectedVersion:version,publish,reason:"Synthetic restricted role model"});
+      assert.equal(response.status,200,JSON.stringify(response.body));
+    }
+    assert.equal((await request(runtimeServer).get("/api/public/project")).body.items.find((item)=>item.id==="synthetic-role-building")?.published.model?.assetId,"synthetic-building");
     await denied("CREATE TABLE forbidden_synthetic(id integer)");
     await denied("ALTER TABLE enquiries ADD COLUMN forbidden_synthetic integer");
     const archive = tool("pg_dump", [...connectArgs, "--format=custom", "--dbname", source]);
@@ -130,6 +150,9 @@ test("PostgreSQL migration owner, runtime permissions, history and recovery", { 
     assert.deepEqual((await recoveryOwner.query("SELECT version FROM schema_migrations ORDER BY version")).rows, expectedMigrations);
     await recoveryOwner.query(grants.replace(`DATABASE ${quote(source)}`, `DATABASE ${quote(restored)}`));
     const recoveryApp = await makeClient({ database: restored, user: runtime, password });
+    const restoredServer=createApp(dbAdapter(recoveryApp),{origin,demo:false,production:false,logging:false,googleMaps:false});
+    assert.equal((await request(restoredServer).get("/api/public/project")).body.items.find((item)=>item.id==="synthetic-role-building")?.published.model?.assetId,"synthetic-building");
+    assert.equal((await recoveryApp.query("SELECT published->'model'->>'assetId' AS id FROM content WHERE id='synthetic-role-building'")).rows[0].id,"synthetic-building");
     assert.equal((await recoveryApp.query("SELECT notes FROM enquiries WHERE id='00000000-0000-4000-8000-000000000001'")).rows[0].notes, "synthetic update");
     assert.equal((await recoveryApp.query("SELECT count(*)::int AS n FROM audit_logs WHERE entity_id='fixture'")).rows[0].n, 1);
     await assert.rejects(recoveryApp.query("DELETE FROM audit_logs"), (error) => error.code === "42501");
