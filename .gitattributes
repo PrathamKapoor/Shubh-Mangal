@@ -1,0 +1,3 @@
+# Preserve the exact supplied source and audit bytes on all platforms.
+/source-data/Shubh_Mangal_Full_Layout.kml -text
+/docs/DATA_AUDIT.json -text
