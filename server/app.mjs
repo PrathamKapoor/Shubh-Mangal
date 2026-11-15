@@ -55,7 +55,7 @@ import { validateFootprint, assessFootprint } from "../shared/footprint.mjs";
 import { createSiteConfig, plotPageTitle } from "../shared/site-config.mjs";
 const uuid = z.uuid();
 const json = (v) => JSON.stringify(v);
-async function assessAccessFootprint(footprint, db) {
+async function assessAccessFootprint(footprint, db, sourceLayout) {
   const project = ([lon, lat]) => {
     // The source layout's UTM zone is not a global projection.
     const [west, south, east] = sourceLayout.geographicBounds;
@@ -129,6 +129,8 @@ export function createApp(
     siteConfig = process.env.SITE_NAME === undefined
       ? undefined
       : { name: process.env.SITE_NAME },
+    sourceLayout: selectedLayout = sourceLayout,
+    sourceBundle = selectedLayout === sourceLayout ? "public/data/layout.json" : null,
   } = {},
 ) {
   const publicSiteConfig = createSiteConfig(siteConfig);
@@ -325,7 +327,7 @@ export function createApp(
       : new Map();
     res.json({
       mode: demo ? "local-demo" : "connected",
-      geographicBounds: sourceLayout.geographicBounds,
+      geographicBounds: selectedLayout.geographicBounds,
       siteConfig: publicSiteConfig,
       items: items
         .filter(
@@ -371,7 +373,7 @@ export function createApp(
                   ...item,
                   published: {
                     ...item.published,
-                    mapPoint: geographicToPlan(item.published.location),
+                    mapPoint: geographicToPlan(item.published.location, selectedLayout),
                   },
                 }
               : item,
@@ -536,7 +538,7 @@ export function createApp(
     res.json(publicPlot(p));
   });
   app.get("/api/public/geometry", async (req, res) => {
-    res.json(await publicGeometry(db, sourceLayout));
+    res.json(await publicGeometry(db, selectedLayout));
   });
   for (const isVisit of [false, true])
     app.post(
@@ -1096,7 +1098,7 @@ export function createApp(
             const created = [],
               existing = [];
             for (const ref of ownerAmenityReferences) {
-              if (!referenceContains(sourceLayout, ref, ref.mapPoint))
+              if (!referenceContains(selectedLayout, ref, ref.mapPoint))
                 throw new HttpError(500, "Reference area mismatch");
               const draft = contentSchemas.amenity.parse({
                 title: ref.title,
@@ -1108,7 +1110,7 @@ export function createApp(
                 descriptionHi:
                   ref.descriptionHi ||
                   "स्वामी द्वारा संकेतित क्षेत्र। सटीक स्थान और वर्तमान स्थिति की पुष्टि बाकी है।",
-                location: planToGeographic(ref.mapPoint),
+                location: planToGeographic(ref.mapPoint, selectedLayout),
                 placementPrecision: "approximate",
                 visualScale: 1,
                 visualRotation: ref.visualRotation,
@@ -1173,7 +1175,7 @@ export function createApp(
               );
             if (old.version !== body.expectedVersion)
               throw new HttpError(409, "Content changed; reload it");
-            const assessment = await assessAccessFootprint(body.footprint, tx);
+            const assessment = await assessAccessFootprint(body.footprint, tx, selectedLayout);
             const draft = contentSchemas.site_access.parse({
               ...old.draft,
               footprint: body.footprint,
@@ -1237,9 +1239,9 @@ export function createApp(
       reference &&
       data.location &&
       !referenceContains(
-        sourceLayout,
+        selectedLayout,
         reference,
-        geographicToPlan(data.location),
+        geographicToPlan(data.location, selectedLayout),
       )
     )
       throw new HttpError(
@@ -1297,7 +1299,7 @@ export function createApp(
           if (old && old.kind !== body.kind)
             throw new HttpError(422, "Content kind cannot change");
           if (body.kind === "site_access" && data.footprint && body.publish)
-            await assessAccessFootprint(data.footprint, tx);
+            await assessAccessFootprint(data.footprint, tx, selectedLayout);
           if (
             body.kind === "site_access" &&
             data.footprint &&
@@ -1820,7 +1822,7 @@ export function createApp(
       .status(201)
       .json(
         await idempotent(req, `geometry-stage:${req.user.id}`, (tx) =>
-          stageGeometry(tx, req.user, req.body),
+          stageGeometry(tx, req.user, req.body, { layout: selectedLayout, sourceBundle }),
         ),
       ),
   );

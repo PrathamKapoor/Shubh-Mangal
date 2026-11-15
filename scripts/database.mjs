@@ -2,14 +2,17 @@ import { openDatabase, migrate } from "../server/db.mjs";
 import { seed } from "../server/seed.mjs";
 import { createUser } from "../server/auth.mjs";
 import { readFile, writeFile } from "node:fs/promises";
+import { loadSiteSource } from "../server/site-source.mjs";
 const db = await openDatabase();
 try {
   const action = process.argv[2];
   if (action === "migrate") {
     await migrate(db);
     console.info("Migrations applied.");
-  } else if (action === "seed") console.info(await seed(db));
-  else if (action === "owner") {
+  } else if (action === "seed") {
+    const selected = await loadSiteSource(process.env.SITE_SOURCE_CONFIG);
+    console.info(await seed(db, { source: selected.source }));
+  } else if (action === "owner") {
     if (!process.env.OWNER_EMAIL || !process.env.OWNER_PASSWORD)
       throw Error(
         "Set OWNER_EMAIL and OWNER_PASSWORD in your private .env (password >=14 characters).",

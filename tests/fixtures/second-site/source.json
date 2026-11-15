@@ -1,0 +1,18 @@
+{
+  "name": "Synthetic Harbour Gardens",
+  "layoutFile": "tests/fixtures/second-site/layout.json",
+  "assets": {
+    "schematic": "/synthetic/schematic.svg",
+    "surveyPlan": null,
+    "poster": null,
+    "surveyPdf": null,
+    "kml": null
+  },
+  "provenance": {
+    "source": "Synthetic geometry",
+    "projection": "UTM 32N",
+    "pdf": null,
+    "authority": "Synthetic test only"
+  },
+  "amenities": []
+}

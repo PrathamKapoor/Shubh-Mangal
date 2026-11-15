@@ -164,18 +164,25 @@ export function deriveCell(feature, id, layout = sourceLayout) {
     labelCandidates: [feature.properties.label],
     status: "unverified",
     verifiedDimensions: null,
-    geometrySource:
-      "Manually proposed source revision; projected UTM 43N; owner and topology review required",
+    geometrySource: `Manually proposed source revision; projected UTM ${layout.origin.utmZone}; owner and topology review required`,
     reviewRequired: true,
   };
 }
-export async function stageGeometry(tx, user, input) {
+export async function stageGeometry(
+  tx,
+  user,
+  input,
+  {
+    layout = sourceLayout,
+    sourceBundle = layout === sourceLayout ? "public/data/layout.json" : null,
+  } = {},
+) {
   const revision = revisionSchema.parse(input),
     digest = hash(JSON.stringify(revision)),
     id = `revision-${digest}`;
   const cells = revision.features.map((f, i) => {
     try {
-      return deriveCell(f, `${id}-cell-${i + 1}`);
+      return deriveCell(f, `${id}-cell-${i + 1}`, layout);
     } catch (error) {
       if (error instanceof HttpError)
         error.message = `Feature ${i + 1}: ${error.message}`;
@@ -205,6 +212,7 @@ export async function stageGeometry(tx, user, input) {
         ...revision,
         features: undefined,
         actor: user.id,
+        ...(sourceBundle ? { sourceBundle } : {}),
         reviewRequired: true,
       }),
     ],
