@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { can } from "../../shared/domain.mjs";
+import { loadSelectedLayout } from "../services/layout";
 import {
   presentationPlacementValid,
   presentationPlot,
@@ -34,9 +35,8 @@ export default function PresentationEditor({
   const [sourceContext, setSourceContext] = useState(null);
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/data/layout.json", { signal: controller.signal })
-      .then((response) => (response.ok ? response.json() : null))
-      .then(setSourceContext)
+    loadSelectedLayout({ signal: controller.signal })
+      .then(({ layout }) => setSourceContext(layout))
       .catch(() => {});
     return () => controller.abort();
   }, []);

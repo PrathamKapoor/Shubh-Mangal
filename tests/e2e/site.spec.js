@@ -466,6 +466,9 @@ test("plot-specific forms and comparisons can retry a failed plot drawing", asyn
   page,
 }) => {
   let fail = true;
+  await page.route("**/api/public/layout", (route) =>
+    fail ? route.abort() : route.continue(),
+  );
   await page.route("**/data/layout.json", (route) =>
     fail ? route.abort() : route.continue(),
   );
@@ -662,6 +665,7 @@ test("primary Hindi explorer and contact controls remain readable on a phone", a
 test("network layout error has a retry and static alternative; offline forms download only", async ({
   page,
 }) => {
+  await page.route("**/api/public/layout", (r) => r.abort());
   await page.route("**/data/layout.json", (r) => r.abort());
   await page.goto("/explore");
   await expect(
@@ -671,6 +675,7 @@ test("network layout error has a retry and static alternative; offline forms dow
     page.getByRole("link", { name: "Open the static drawing" }),
   ).toBeVisible();
   await page.unroute("**/data/layout.json");
+  await page.unroute("**/api/public/layout");
   await page.getByRole("button", { name: "Retry layout" }).click();
   await expect(page.locator(".map-area > svg")).toBeVisible();
   await page.route("**/api/**", (r) => r.abort());

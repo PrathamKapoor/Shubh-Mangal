@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   geographicToPlan,
   planToGeographic,
-  projectionFromLayout,
 } from "../../shared/geography.mjs";
 import {
   amenityClipBridges,
@@ -13,6 +12,7 @@ import {
 import AmenityArtwork from "./AmenityArtwork";
 import LeisureFacility from "./LeisureFacility";
 import { foregroundImage, foregroundReference } from "../services/amenities";
+import { loadSelectedLayout } from "../services/layout";
 function projectLocation(location, layout) {
   try {
     return geographicToPlan(location, layout);
@@ -42,15 +42,8 @@ export default function MapPositionEditor({
     : reference;
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/data/layout.json", { signal: controller.signal })
-      .then((r) => {
-        if (!r.ok) throw Error("Plan unavailable");
-        return r.json();
-      })
-      .then((data) => {
-        projectionFromLayout(data);
-        setLayout(data);
-      })
+    loadSelectedLayout({ signal: controller.signal })
+      .then(({ layout }) => setLayout(layout))
       .catch((e) => {
         if (e.name !== "AbortError")
           setError(

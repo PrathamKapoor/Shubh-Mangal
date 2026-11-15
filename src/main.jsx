@@ -10,6 +10,7 @@ import { createRoot } from "react-dom/client";
 import { filterPlots, areaLabel, approvedBlocks } from "../shared/domain.mjs";
 import { createSiteConfig } from "../shared/site-config.mjs";
 import { api, loadStored, loadPublicInventory } from "./services/api";
+import { isLegacyReferenceMismatch, loadSelectedLayout } from "./services/layout";
 import {
   ownerAmenityReferences,
   previewAmenity,
@@ -80,7 +81,7 @@ class Boundary extends React.Component {
 function App() {
   const hasPublicData = useRef(false);
   const [route, setRoute] = useState(readRoute),
-    [data, setData] = useState(null),
+    [layoutResult, setLayoutResult] = useState(null),
     [error, setError] = useState(""),
     [retry, setRetry] = useState(0),
     [inventory, setInventory] = useState([]),
@@ -88,9 +89,13 @@ function App() {
     [content, setContent] = useState([]),
     [siteConfig, setSiteConfig] = useState(() => createSiteConfig()),
     [siteExtent, setSiteExtent] = useState(null),
+    [legacyReferenceAvailable, setLegacyReferenceAvailable] = useState(false),
     [siteAccessStatus, setSiteAccessStatus] = useState("unavailable"),
     [stale, setStale] = useState(false),
     [publicReady, setPublicReady] = useState(false);
+  const mismatchedReference = isLegacyReferenceMismatch(layoutResult, mode, siteConfig.name, siteExtent);
+  const data = publicReady && !mismatchedReference ? layoutResult?.layout || null : null;
+  const layoutError = error || (publicReady && mismatchedReference ? "The selected layout is unavailable." : "");
   const [language, setLanguage] = useState(() =>
       loadStored("sm-language", "en"),
     ),
@@ -225,16 +230,13 @@ function App() {
     if (!exploring && path !== "/contact" && path !== "/compare") return;
     const controller = new AbortController();
     setError("");
+    setLayoutResult(null);
     const timer = setTimeout(() => {
       controller.abort();
       setError("The colony drawing timed out. Please retry.");
     }, NETWORK_TIMEOUT_MS);
-    fetch("/data/layout.json", { signal: controller.signal })
-      .then((r) => {
-        if (!r.ok) throw Error("The colony drawing could not be loaded.");
-        return r.json();
-      })
-      .then(setData)
+    loadSelectedLayout({ signal: controller.signal, allowOffline: !hasPublicData.current })
+      .then(setLayoutResult)
       .catch((e) => {
         if (e.name !== "AbortError") setError(e.message);
       })
@@ -270,6 +272,7 @@ function App() {
           setMode(project.mode);
           setContent(project.items);
           setSiteExtent(project.geographicBounds || null);
+          setLegacyReferenceAvailable(project.legacyReferenceAvailable === true);
           setSiteAccessStatus(project.siteAccessStatus || "unavailable");
           setInventory(result);
           setStale(false);
@@ -298,10 +301,10 @@ function App() {
   }, [retry, path]);
   const plots = useMemo(() => {
     if (!data) return [];
-    if (mode === "connected") return inventory;
+    if (mode === "connected" || (mode === "offline" && layoutResult?.source === "api")) return inventory;
     const mapped = new Set(inventory.map((p) => p.geometryId));
     return [...inventory, ...data.plots.filter((p) => !mapped.has(p.id))];
-  }, [data, inventory, mode]);
+  }, [data, inventory, mode, layoutResult]);
   const blocks = useMemo(() => approvedBlocks(plots), [plots]);
   const mapStructures = useMemo(
     () => stale ? [] : content.filter((item) => item.kind === "structure"),
@@ -715,20 +718,20 @@ function App() {
                   </button>
                 </div>
               )}
-              {error ? (
+              {layoutError ? (
                 <section className="page" role="alert">
                   <h2>Unable to load the drawing</h2>
-                  <p>{error}</p>
+                  <p>{layoutError}</p>
                   <button onClick={() => setRetry((n) => n + 1)}>
                     Retry layout
                   </button>
-                  <a
+                  {(legacyReferenceAvailable || (mode === "offline" && !hasPublicData.current)) && <a
                     href="/assets/geographic-layout.svg"
                     target="_blank"
                     rel="noreferrer"
                   >
                     Open the static drawing
-                  </a>
+                  </a>}
                 </section>
               ) : !data ? (
                 <p className="page" role="status">
@@ -1314,10 +1317,10 @@ function App() {
               units={units}
               areaUnit={areaUnit}
               loading={
-                compare.length > 0 && ((!data && !error) || !publicReady)
+                compare.length > 0 && ((!data && !layoutError) || !publicReady)
               }
               missing={compare.filter((id) => !plots.some((p) => p.id === id))}
-              loadError={compare.length && !data ? error : ""}
+              loadError={compare.length && !data ? layoutError : ""}
               onRetry={() => setRetry((n) => n + 1)}
             />
           ) : path === "/contact" ? (
@@ -1327,8 +1330,8 @@ function App() {
                 plots={plots}
                 initialPlot={plot}
                 requestedPlotId={route.params.get("plot") || ""}
-                plotsLoading={(!data && !error) || !publicReady}
-                plotLoadError={!data ? error : ""}
+                plotsLoading={(!data && !layoutError) || !publicReady}
+                plotLoadError={!data ? layoutError : ""}
                 onRetryPlots={() => setRetry((n) => n + 1)}
                 connectionChecking={!publicReady}
                 kind={

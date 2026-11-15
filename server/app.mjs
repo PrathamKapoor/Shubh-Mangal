@@ -381,6 +381,20 @@ export function createApp(
       storage: db.kind,
     });
   });
+  app.get("/api/public/layout", (req, res) => {
+    if (demo) return res.json(selectedLayout);
+    // Connected visitors receive projection metadata only; the static source
+    // cells and areas are provisional and are not published inventory.
+    res.json({
+      project: publicSiteConfig.name,
+      viewBox: selectedLayout.viewBox,
+      origin: selectedLayout.origin,
+      geographicBounds: selectedLayout.geographicBounds,
+      plots: [],
+      areas: [],
+      annotations: [],
+    });
+  });
   app.get("/api/public/project", async (req, res) => {
     const items = (
       await db.query(
@@ -420,6 +434,7 @@ export function createApp(
     res.json({
       mode: demo ? "local-demo" : "connected",
       geographicBounds: selectedLayout.geographicBounds,
+      legacyReferenceAvailable: demo && sourceBundle === "public/data/layout.json",
       siteAccessStatus,
       siteConfig: publicSiteConfig,
       items: items

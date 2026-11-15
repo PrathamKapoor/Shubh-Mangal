@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { geographicToPlan } from "../../shared/geography.mjs";
 import { siteAccessFootprintSchema } from "../../shared/site-access.mjs";
+import { loadSelectedLayout } from "../services/layout";
 
 const emptyFootprint = {
   datum: "WGS84",
@@ -169,12 +170,8 @@ export default function FootprintReview({ item, busy, onStage }) {
   const [parcels, setParcels] = useState({ status: "loading", paths: [] });
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/data/layout.json", { signal: controller.signal })
-      .then((r) => {
-        if (!r.ok) throw Error();
-        return r.json();
-      })
-      .then(setLayout)
+    loadSelectedLayout({ signal: controller.signal })
+      .then(({ layout }) => setLayout(layout))
       .catch((e) => {
         if (e.name !== "AbortError") setLayoutError(true);
       });
