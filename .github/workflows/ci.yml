@@ -26,10 +26,17 @@ jobs:
       - run: npm run build
       - run: npx --no-install playwright install --with-deps chromium
       - run: npm run test:e2e -- --forbid-only
+      - name: Controlled Google Maps browser coverage
+        run: npx --no-install playwright test tests/e2e/google-map.spec.js --project=desktop --forbid-only
+        env:
+          VITE_GOOGLE_MAPS_ENABLED: "true"
+          VITE_GOOGLE_MAPS_KEY: fixture-key
+      - name: Synthetic alternate-site browser coverage
+        run: npx --no-install playwright test --config=playwright.site-b.config.js --forbid-only
 
   postgres:
     name: Disposable PostgreSQL 16 integration
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     services:
       postgres:
@@ -53,7 +60,11 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Install PostgreSQL 16 client tools
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client-16
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-16
+          /usr/lib/postgresql/16/bin/pg_dump --version
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
       - name: Check PostgreSQL integration and synthetic recovery
         run: node scripts/postgres-check.mjs
         env:
@@ -72,6 +83,13 @@ jobs:
         run: node --test tests/postgres-spatial-concurrency.test.mjs
         env:
           RUN_POSTGRES_SPATIAL_CHECK: "true"
+          ALLOW_DISPOSABLE_POSTGRES: "true"
+          TEST_POSTGRES_MAJOR: "16"
+          TEST_DATABASE_URL: postgresql://shubh_fixture:synthetic-ci-password@127.0.0.1:5432/shubh_test_control
+      - name: Check public snapshot consistency on PostgreSQL 16
+        run: node --test tests/public-snapshot-postgres.test.mjs
+        env:
+          RUN_PUBLIC_SNAPSHOT_POSTGRES: "true"
           ALLOW_DISPOSABLE_POSTGRES: "true"
           TEST_POSTGRES_MAJOR: "16"
           TEST_DATABASE_URL: postgresql://shubh_fixture:synthetic-ci-password@127.0.0.1:5432/shubh_test_control
