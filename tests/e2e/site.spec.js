@@ -1246,7 +1246,10 @@ for (const ref of ownerAmenityReferences.filter(
       const response = await route.fetch(); const snapshot = await response.json();
       await route.fulfill({response,json:{...snapshot,project:{...snapshot.project,mode:"connected",items:[]},plots:[]}});
     });
+    const refreshed = page.waitForResponse((response) => response.url().includes("/api/public/snapshot") && response.ok());
     await page.reload();
+    await refreshed;
+    await expect(page.locator(".map-area > svg")).toBeVisible();
     await expect(page.locator(".amenity-marker")).toHaveCount(0);
   });
 
