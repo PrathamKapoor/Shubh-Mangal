@@ -79,6 +79,9 @@ test("normal startup supports synthetic parcel, gate and building publication", 
     await card.locator(":scope > summary").click();
     await card.getByRole("combobox",{name:"Kind",exact:true}).selectOption(kind);
     if (kind !== "site_access") await card.getByLabel("Content ID",{exact:true}).fill(id);
+    await card.getByLabel("Import draft JSON").fill("{");
+    await card.getByRole("button",{name:"Apply imported draft"}).click();
+    await expect(card.getByRole("alert")).toContainText("Enter a complete JSON draft");
     await card.getByLabel("Import draft JSON").fill(JSON.stringify(data));
     await card.getByRole("button",{name:"Apply imported draft"}).click();
     await card.getByLabel("Reason",{exact:true}).fill("Synthetic owner initial draft");
@@ -145,6 +148,8 @@ test("normal startup supports synthetic parcel, gate and building publication", 
   await expect.poll(async()=> (await (await page.request.get("/api/public/project")).json()).items.find(x=>x.id==="synthetic-building")?.published.height?.metres).toBe(4.5);
   await page.goto("/location");
   await expect(page.getByRole("link", { name: "Google Maps directions ↗" })).toHaveAttribute("href", /maps/);
+  const directions = new URL(await page.getByRole("link", {name:"Google Maps directions ↗"}).getAttribute("href"));
+  expect(directions.searchParams.get("destination")).toBe(`${base.routeAccess.lat},${base.routeAccess.lon}`);
   await page.goto("/explore");
   await page.getByRole("button", { name: "2D plan (Source drawing)" }).click();
   await expect(page.locator('[data-structure-id="synthetic-building"]')).toBeVisible();
