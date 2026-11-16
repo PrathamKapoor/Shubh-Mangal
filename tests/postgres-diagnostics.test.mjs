@@ -19,7 +19,7 @@ test("PostgreSQL diagnostics redact secrets while retaining error code, stack an
   assert.ok(Number.isFinite(Date.parse(row.timestamp)));
 });
 
-test("PostgreSQL observers classify idle and transaction errors without suppressing emitter failure", () => {
+test("PostgreSQL observers classify idle and transaction errors and cannot report success after an event error", () => {
   class Pool extends EventEmitter {}
   const pg = { Pool };
   const lines = [];
@@ -36,7 +36,8 @@ test("PostgreSQL observers classify idle and transaction errors without suppress
     client.connection.emit("errorMessage", Object.assign(new Error("transaction failure"), { code: "57P01" }));
     pool.emit("release", undefined, client);
     const error = Object.assign(new Error("idle failure"), { code: "57P01" });
-    assert.throws(() => pool.emit("error", error, client), (actual) => actual === error);
+    pool.emit("error", error, client);
+    assert.throws(() => reportFailures(undefined, undefined, d.failures), (actual) => actual.errors.includes(error));
     assert.ok(lines.some((row) => row.location === "checked-out-transaction" && row.backend === 123));
     assert.ok(lines.some((row) => row.location === "idle-pool" && row.backend === 123));
   } finally { restore(); }

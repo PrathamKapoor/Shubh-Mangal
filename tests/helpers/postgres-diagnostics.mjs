@@ -46,17 +46,16 @@ export function observePostgres(pg, diagnostics) {
       const pool = ["setup", "first", "second"][poolCount++] ?? `pool-${poolCount}`;
       const clients = new WeakMap();
       let clientCount = 0;
+      // Unexpected events are retained and MUST fail reportFailures(), rather
+      // than an uncaught cleanup event replacing an earlier assertion.
+      this.on("error", (error, client) => diagnostics.error("idle-pool", error, { pool, ...clients.get(client) }));
       const emit = this.emit;
       this.emit = function (event, ...values) {
         const client = event === "error" || event === "release" ? values[1] : values[0];
         if (event === "connect") {
           const state = { connection: `${pool}-${++clientCount}`, backend: client.processID, state: "idle", transaction: false };
           clients.set(client, state);
-          const clientEmit = client.emit;
-          client.emit = function (name, ...args) {
-            if (name === "error") diagnostics.error(state.state === "idle" ? "idle-client" : state.transaction ? "checked-out-transaction" : "checked-out-client", args[0], { pool, ...state });
-            return clientEmit.call(this, name, ...args);
-          };
+          client.on("error", (error) => diagnostics.error(state.state === "idle" ? "idle-client" : state.transaction ? "checked-out-transaction" : "checked-out-client", error, { pool, ...state }));
           client.connection.on("readyForQuery", (message) => { state.transaction = message.status === "T" || message.status === "E"; });
           client.connection.on("errorMessage", (error) => diagnostics.error(state.state === "idle" ? "idle-client" : state.transaction ? "checked-out-transaction" : "checked-out-client", error, { pool, ...state }));
         }
@@ -64,8 +63,6 @@ export function observePostgres(pg, diagnostics) {
         if (state && event === "acquire") state.state = "checked-out";
         if (state && event === "release") state.state = "idle";
         if (["connect", "acquire", "release", "remove"].includes(event)) diagnostics.record(`pool.${event}`, { pool, ...state, total: this.totalCount, idle: this.idleCount, waiting: this.waitingCount });
-        if (event === "error") diagnostics.error("idle-pool", values[0], { pool, ...state });
-        // Preserve EventEmitter semantics, including throwing unhandled errors.
         return emit.call(this, event, ...values);
       };
       const end = this.end;
