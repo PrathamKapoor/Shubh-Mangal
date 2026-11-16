@@ -1,4 +1,5 @@
 import React, { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { contentSchemas } from "../../shared/content.mjs";
 import { can, roles, statuses, parseLength } from "../../shared/domain.mjs";
 import { api, downloadJSON } from "../services/api";
 import PresentationEditor from "./PresentationEditor";
@@ -1787,6 +1788,9 @@ export default function Admin({ siteConfig, sourceAssets = {}, legacySource = fa
   );
 }
 function ContentEditor({ item, run, mutate, user, busy }) {
+  const [importText, setImportText] = useState("");
+  const [importError, setImportError] = useState("");
+  const [importRevision, setImportRevision] = useState(0);
   const [kind, setKind] = useState(item.kind),
     [draft, setDraft] = useState(() =>
       item.kind === "amenity"
@@ -1951,11 +1955,24 @@ function ContentEditor({ item, run, mutate, user, busy }) {
             </select>
           </label>
         )}
+        {<section aria-label="Import sourced draft">
+          <label>Import draft JSON<textarea value={importText} onChange={(event) => setImportText(event.target.value)} rows={5} /></label>
+          <button type="button" onClick={() => {
+            try {
+              const parsed = contentSchemas[kind].parse(JSON.parse(importText));
+              setDraft(parsed); setImportError(""); setImportRevision((value) => value + 1);
+            } catch (error) {
+              setImportError(error.issues ? error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ") : "Enter a complete JSON draft for the selected kind.");
+            }
+          }}>Apply imported draft</button>
+          {importError && <p role="alert">{importError}</p>}
+          <p>Imports fill a private draft. Save, reload and review before publishing.</p>
+        </section>}
         {kind === "site_access" && (
           <>
             <p className="small">Publication requires existing status, a reviewed source and revision, a review date, and route access coordinates. Physical anchor and heading are optional.</p>
             <GateModelFields value={draft.model ?? null} onChange={(model) => setDraft((current) => ({...current, model}))} />
-            <FootprintReview item={item} busy={busy} onStage={async (footprint, reason) => {
+            <FootprintReview key={importRevision} item={{...item, draft}} busy={busy} onStage={async (footprint, reason) => {
               const result = await run(
                 async () => {
                   try {
@@ -1976,7 +1993,7 @@ function ContentEditor({ item, run, mutate, user, busy }) {
             }} />
           </>
         )}
-        {kind === "structure" && <StructureFields value={draft} onChange={setDraft} />}
+        {kind === "structure" && <StructureFields key={importRevision} value={draft} onChange={setDraft} />}
         {["structure", "site_access"].includes(kind) && item.published && can(user.role, "publish") && (
           <button type="button" disabled={busy} onClick={(event) => {
             const reason = event.currentTarget.form.elements.reason.value;
