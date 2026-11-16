@@ -12,8 +12,8 @@ longitude then latitude; Google positions use `{lat, lng}`. Plan x increases eas
 plan y increases south from `northingTop`. Projection round trips test arithmetic,
 not the accuracy of source coordinates against physical boundaries.
 
-The product is configured for one colony. `server/geometry.mjs` still constrains
-revision input to this site's geographic extent; amenity validation in
+The product is configured for one colony. `server/geometry.mjs` validates
+revision input against the selected layout's projection region and extent; amenity validation in
 `server/content.mjs`, owner reference locations, source files, seed records and
 project content are site-specific. Portable projection helpers do not establish a
 multi-site product or a fully working second-site import/publication flow.

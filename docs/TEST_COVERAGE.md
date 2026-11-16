@@ -25,6 +25,6 @@ node node_modules/@playwright/test/cli.js test tests/e2e/google-map.spec.js --pr
 Remove-Item Env:VITE_GOOGLE_MAPS_ENABLED, Env:VITE_GOOGLE_MAPS_KEY
 ```
 
-For Unix shells, prefix the command with `VITE_GOOGLE_MAPS_ENABLED=true VITE_GOOGLE_MAPS_KEY=fixture-key`. Do not use a real key with the adapter. The default Node suite skips the opt-in real-server tests in `tests/postgres-roles.test.mjs` and `tests/postgres-spatial-concurrency.test.mjs`; see `docs/DEPLOYMENT.md` for its guarded disposable target. Both opt-in tests were run locally against PostgreSQL 18.6, not PostgreSQL 16 or remote CI.
+For Unix shells, prefix the command with `VITE_GOOGLE_MAPS_ENABLED=true VITE_GOOGLE_MAPS_KEY=fixture-key`. Do not use a real key with the adapter. The default Node suite skips the opt-in real-server tests in `tests/postgres-roles.test.mjs`, `tests/postgres-spatial-concurrency.test.mjs` and `tests/public-snapshot-postgres.test.mjs`; see `docs/DEPLOYMENT.md` for its guarded disposable target. The earlier role and spatial opt-in tests were run locally against PostgreSQL 18.6, not PostgreSQL 16 or remote CI.
 
 The competing-editor tests use a second disposable API on port 3003 and Vite on 5182, so earlier test logins cannot exhaust their shared IP rate limit. Both test servers enforce the regular application limit and use separate in-memory databases.
