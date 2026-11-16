@@ -3,15 +3,6 @@ import { publicGeometry } from "./public-geometry.mjs";
 
 const pick = (value, keys) => Object.fromEntries(keys.filter((key) => value?.[key] !== undefined).map((key) => [key, value[key]]));
 
-function snapshotPlot(row) {
-  const geometry = pick(row.geometry, ["path", "center", "bounds", "areaSqMApprox", "identityReviewRequired", "labelCandidates", "verifiedDimensions", "geometrySource"]);
-  if (row.geometry?.geographicGeometry) geometry.geographicGeometry = pick(row.geometry.geographicGeometry, ["type", "coordinates"]);
-  if (Array.isArray(row.geometry?.edges)) geometry.edges = row.geometry.edges.map((edge) => pick(edge, ["a", "b", "metres", "feet"]));
-  const data = pick(row.data, ["number", "block", "phase", "corner", "parkFacing", "documentIds", "plotType", "areaSqM", "areaSourceText", "roadWidthMetres", "facing", "sourceDocument", "sourceRevision"]);
-  if (Array.isArray(row.data?.dimensions)) data.dimensions = row.data.dimensions.map((dimension) => pick(dimension, ["name", "metres", "sourceText", "edgeIndex"]));
-  return publicPlot({ ...row, geometry, data });
-}
-
 // project(tx) must return the existing explicitly public project projection,
 // and every query it performs must use tx. No response may be sent inside it.
 export async function loadPublicSnapshot(db, layout, project) {
@@ -28,6 +19,6 @@ export async function loadPublicSnapshot(db, layout, project) {
       ...feature,
       geometry: pick(feature.geometry, ["type", "coordinates"]),
     }));
-    return { project: publicProject, plots: rows.map(snapshotPlot), geometry };
+    return { project: publicProject, plots: rows.map(publicPlot), geometry };
   });
 }

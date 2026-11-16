@@ -20,9 +20,15 @@ export async function getPlot(tx, id) {
     )
   ).rows[0];
 }
+const pickPublic = (value, keys) => Object.fromEntries(keys.filter((key) => value?.[key] !== undefined).map((key) => [key, value[key]]));
 export function publicPlot(p) {
+  const geometry = pickPublic(p.geometry, ["path", "center", "bounds", "areaSqMApprox", "identityReviewRequired", "labelCandidates", "verifiedDimensions", "geometrySource"]);
+  if (p.geometry?.geographicGeometry) geometry.geographicGeometry = pickPublic(p.geometry.geographicGeometry, ["type", "coordinates"]);
+  if (Array.isArray(p.geometry?.edges)) geometry.edges = p.geometry.edges.map((edge) => pickPublic(edge, ["a", "b", "metres", "feet"]));
+  const approved = pickPublic(p.data, ["number", "block", "phase", "corner", "parkFacing", "documentIds", "plotType", "areaSqM", "areaSourceText", "roadWidthMetres", "facing", "sourceDocument", "sourceRevision"]);
+  if (Array.isArray(p.data?.dimensions)) approved.dimensions = p.data.dimensions.map((dimension) => pickPublic(dimension, ["name", "metres", "sourceText", "edgeIndex"]));
   return {
-    ...p.geometry,
+    ...geometry,
     id: p.id,
     geometryId: p.draft_id,
     label: p.number,
@@ -30,7 +36,7 @@ export function publicPlot(p) {
     status: p.status,
     publication: p.publication,
     version: p.version,
-    approved: { ...p.data, reviewNote: undefined },
+    approved: { ...approved, reviewNote: undefined },
     verifiedAt: p.verified_at,
     updatedAt: p.updated_at,
     statusUpdatedAt: p.status_updated_at || null,

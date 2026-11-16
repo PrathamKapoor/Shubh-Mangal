@@ -31,7 +31,7 @@ export async function publicGeometry(db, layout) {
             ? "reviewed-input"
             : "legacy-projected-path",
         },
-        geometry,
+        geometry: { type: geometry.type, coordinates: geometry.coordinates },
       },
     ];
   });
