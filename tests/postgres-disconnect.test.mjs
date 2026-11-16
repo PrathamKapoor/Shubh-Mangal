@@ -63,6 +63,9 @@ test("PostgreSQL adapter close waits for the real client disconnect before dispo
     assert.equal(finished, false, "adapter.close resolved before its PostgreSQL client disconnected");
     allowed.resolve();
     await closing;
+    const remaining = (await admin.query("SELECT pid FROM pg_stat_activity WHERE datname=$1", [name])).rows;
+    diagnostics.record("sessions.after-disconnect", { sessions: remaining });
+    assert.deepEqual(remaining, [], "completed adapter close must leave no database sessions");
     diagnostics.phase("assertions.complete");
   } catch (error) {
     bodyFailure = error;

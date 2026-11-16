@@ -15,10 +15,26 @@ export async function openDatabase({
           ? { rejectUnauthorized: true }
           : undefined,
     });
+    // pg-pool can resolve end() when clients leave its bookkeeping, before
+    // their sockets actually close. Callers may delete a disposable database
+    // or terminate the process after close(), so await real disconnects too.
+    const disconnects = new Set();
+    pool.on("connect", (client) => {
+      const disconnected = new Promise((resolve) => {
+        client.once("end", () => {
+          disconnects.delete(disconnected);
+          resolve();
+        });
+      });
+      disconnects.add(disconnected);
+    });
     return {
       query: (s, p = []) => pool.query(s, p),
       exec: (s) => pool.query(s),
-      close: () => pool.end(),
+      close: async () => {
+        await pool.end();
+        await Promise.all(disconnects);
+      },
       kind: "postgres",
       transaction: async (fn) => {
         const c = await pool.connect();
