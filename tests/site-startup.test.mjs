@@ -271,6 +271,11 @@ test("alternate source exposes its own assets and refuses legacy amenity staging
     const login = await agent.post("/api/auth/login").set("Origin", origin).send({ email: "siteb@example.invalid", password: "Synthetic-test-only-927156!" });
     const stage = await agent.post("/api/admin/amenity-references/stage").set("Origin", origin).set("X-CSRF-Token", login.body.csrf).set("Idempotency-Key", randomUUID()).send({ reason: "Synthetic review" });
     assert.equal(stage.status, 404);
+    const amenity = { title: "Harbour green", description: "Synthetic site amenity", location: {lat:50,lon:9}, source:"Synthetic survey", verifiedAt:null, state:"planned" };
+    const save = (location) => agent.put("/api/admin/content/harbour-test-green").set("Origin",origin).set("X-CSRF-Token",login.body.csrf).set("Idempotency-Key",randomUUID()).send({kind:"amenity",data:{...amenity,location},expectedVersion:0,publish:false,reason:"Synthetic site location review"});
+    const valid = await save(amenity.location);
+    assert.equal(valid.status,200,JSON.stringify(valid.body));
+    assert.equal((await save({lat:24.466,lon:74.908})).status,422);
     assert.equal((await db.query("SELECT count(*)::int AS count FROM content WHERE id LIKE 'owner-ref-%'")).rows[0].count, 0);
   } finally { await db.close(); }
 });

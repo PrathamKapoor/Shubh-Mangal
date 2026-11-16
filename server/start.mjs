@@ -20,11 +20,8 @@ const selected = await loadSiteSource(process.env.SITE_SOURCE_CONFIG);
 const staticDirectory = resolve(process.env.SITE_BUILD_DIR || "dist");
 const alternate = JSON.stringify(selected.source) !== JSON.stringify(createSiteSource());
 if (alternate) {
-  const synthetic = await loadSiteSource("tests/fixtures/second-site/source.json");
-  if (JSON.stringify(selected.source) !== JSON.stringify(synthetic.source) || selected.revision !== synthetic.revision)
-    throw Error("Alternate site startup is disabled except for the isolated synthetic fixture.");
   if (process.env.SITE_NAME !== undefined && process.env.SITE_NAME !== selected.source.name)
-    throw Error("SITE_NAME must match the selected synthetic source identity.");
+    throw Error("SITE_NAME must match the selected source identity.");
 }
 if (production || alternate) {
   let manifest;

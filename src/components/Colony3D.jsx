@@ -294,6 +294,7 @@ function PlotLabels({ plots, selected, visibleIds, enabled }) {
 // shapes; it is a schematic path rather than a claim about constructed access.
 function FacilityConnections({ amenities, data, plots }) {
   const segments = useMemo(() => {
+    if (data.legacyArtwork === false) return [];
     const lookup = new Map(amenities.map((item) => [item.id, item]));
     const pairs = [
       ["owner-ref-temple", "owner-ref-garden", ["area-2", "area-40"]],
@@ -301,7 +302,7 @@ function FacilityConnections({ amenities, data, plots }) {
       ["owner-ref-pool", "owner-ref-gym", ["area-3"]],
     ];
     const road = data.areas
-      .filter((a) => a.kind === "road" || a.id === "area-31")
+      .filter((a) => a.kind === "road" || (data.legacyArtwork !== false && a.id === "area-31"))
       .flatMap((a) => classifyRings(ringsFromPath(a.path)));
     const parcels = plots.flatMap((p) => classifyRings(ringsFromPath(p.path)));
     const inShape = (p, group) =>
@@ -898,19 +899,19 @@ export default function Colony3D({
               <meshStandardMaterial color="#9cb881" />
             </mesh>
             {data.areas
-              .filter((a) => a.kind === "road" || a.id === "area-31")
+              .filter((a) => a.kind === "road" || (data.legacyArtwork !== false && a.id === "area-31"))
               .map((a) => (
                 <group key={a.id}>
                   <Surface
                     path={a.path}
-                    colour={a.id === "area-31" ? "#5e6b68" : "#68716e"}
+                    colour={(data.legacyArtwork !== false && a.id === "area-31") ? "#5e6b68" : "#68716e"}
                     height={0}
                   />
                   <Outline path={a.path} colour="#bbb8a5" />
                 </group>
               ))}
             {data.areas
-              .filter((a) => a.kind === "amenity" && a.id !== "area-31")
+              .filter((a) => a.kind === "amenity" && (data.legacyArtwork === false || a.id !== "area-31"))
               .map((a) => (
                 <Surface
                   key={a.id}
@@ -967,7 +968,7 @@ export default function Colony3D({
                   />
                 ))}
             {data.areas
-              .filter((area) => area.id === "area-0")
+              .filter((area) => (area.kind === "site" || (data.legacyArtwork !== false && area.id === "area-0")))
               .map((area) => (
                 <Outline key={area.id} path={area.path} colour="#e6dfc8" />
               ))}

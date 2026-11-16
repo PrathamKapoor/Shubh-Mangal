@@ -29,3 +29,22 @@ test("normal startup rejects a mismatched build before opening the selected data
     await assert.rejects(access(database), { code: "ENOENT" });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("independent source identity reaches normal build validation without a fixture exception", async () => {
+  const { mkdtemp, writeFile, readFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { spawnSync } = await import("node:child_process");
+  const root = await mkdtemp(join(tmpdir(), "independent-site-"));
+  try {
+    const config = JSON.parse(await readFile("tests/fixtures/second-site/source.json","utf8"));
+    config.name = "Independent Estuary Development";
+    const path = join(root,"source.json");
+    await writeFile(path,JSON.stringify(config));
+    const env = {...process.env, NODE_ENV:"development",SITE_SOURCE_CONFIG:path,SITE_BUILD_DIR:join(root,"missing-build"),DATABASE_URL:"",LOCAL_DB_PATH:join(root,"db")};
+    delete env.SITE_NAME;
+    const result=spawnSync(process.execPath,["server/start.mjs"],{env,encoding:"utf8"});
+    assert.match(result.stderr,/Browser build identity is missing/);
+    assert.doesNotMatch(result.stderr,/isolated synthetic fixture/);
+  } finally { await rm(root,{recursive:true,force:true}); }
+});

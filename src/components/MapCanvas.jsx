@@ -148,6 +148,7 @@ export default function MapCanvas({
   structures = [],
 }) {
   const hi = language === "hi";
+  const legacyArtwork = data.legacyArtwork !== false;
   const svg = useRef(),
     panel = useRef(),
     previousFocus = useRef(),
@@ -227,20 +228,20 @@ export default function MapCanvas({
     () => plots.map((item) => item.path).join(" "),
     [plots],
   );
-  const sitePath = data.areas.find((area) => area.id === "area-0")?.path;
+  const sitePath = data.areas.find((area) => (area.kind === "site" || (legacyArtwork && area.id === "area-0")))?.path;
   const perimeterPlants = useMemo(() => perimeterSamples(sitePath), [sitePath]);
   const entranceEdge = useMemo(() => {
-    const approach = data.areas.find((area) => area.id === "area-31");
+    const approach = data.areas.find((area) => (legacyArtwork && area.id === "area-31"));
     const bottom = areaRing(approach?.path || "")
       .sort((a, b) => b[1] - a[1])
       .slice(0, 2);
     return bottom.length === 2
       ? `M${bottom[0].join(",")} L${bottom[1].join(",")}`
       : "";
-  }, [data]);
+  }, [data, legacyArtwork]);
   const approachExtension = useMemo(() => {
     const ring = areaRing(
-      data.areas.find((area) => area.id === "area-31")?.path || "",
+      data.areas.find((area) => (legacyArtwork && area.id === "area-31"))?.path || "",
     );
     if (
       ring.length > 1 &&
@@ -262,7 +263,7 @@ export default function MapCanvas({
       y + (25 * dy) / length,
     ]);
     return `M${start[0].join(",")} L${start[1].join(",")} L${extension[1].join(",")} L${extension[0].join(",")} Z`;
-  }, [data]);
+  }, [data, legacyArtwork]);
   const mappedAmenities = useMemo(
     () =>
       amenities.flatMap((a) => {
@@ -1188,7 +1189,7 @@ export default function MapCanvas({
                 fill="white"
               />
               {data.areas
-                .filter((area) => area.kind === "road" || area.id === "area-31")
+                .filter((area) => area.kind === "road" || (legacyArtwork && area.id === "area-31"))
                 .map((area) => (
                   <path
                     key={area.id}
@@ -1217,7 +1218,7 @@ export default function MapCanvas({
                 />
                 {data.areas
                   .filter(
-                    (area) => area.kind === "road" || area.id === "area-31",
+                    (area) => area.kind === "road" || (legacyArtwork && area.id === "area-31"),
                   )
                   .map((area) => (
                     <path
@@ -1239,7 +1240,7 @@ export default function MapCanvas({
                 >
                   {data.areas
                     .filter(
-                      (area) => area.kind === "road" || area.id === "area-31",
+                      (area) => area.kind === "road" || (legacyArtwork && area.id === "area-31"),
                     )
                     .map((area) => (
                       <path key={area.id} d={area.path} clipRule="evenodd" />
@@ -1265,7 +1266,7 @@ export default function MapCanvas({
                   {data.areas
                     .filter(
                       (area) =>
-                        area.kind === "amenity" && area.id !== "area-31",
+                        area.kind === "amenity" && (!legacyArtwork || area.id !== "area-31"),
                     )
                     .map((area) => (
                       <path
@@ -1420,13 +1421,13 @@ export default function MapCanvas({
                 key={a.id}
                 data-area={a.id}
                 d={a.path}
-                className={`area ${a.kind} ${a.id === "area-31" ? "approach-reference" : ""} ${["area-2", "area-3", "area-30", "area-40"].includes(a.id) ? "concept-landscape" : ""}`}
+                className={`area ${a.kind} ${(legacyArtwork && a.id === "area-31") ? "approach-reference" : ""} ${legacyArtwork && ["area-2", "area-3", "area-30", "area-40"].includes(a.id) ? "concept-landscape" : ""}`}
                 fillRule="evenodd"
               />
             ))}
           {mapMode === "colony" &&
             data.areas
-              .filter((a) => a.kind === "road" || a.id === "area-31")
+              .filter((a) => a.kind === "road" || (legacyArtwork && a.id === "area-31"))
               .map((a) => (
                 <path
                   key={`surface-${a.id}`}
@@ -1434,7 +1435,7 @@ export default function MapCanvas({
                   d={a.path}
                   fill="url(#road-surface-texture)"
                   fillRule="evenodd"
-                  opacity={a.id === "area-31" ? 0.18 : 0.24}
+                  opacity={(legacyArtwork && a.id === "area-31") ? 0.18 : 0.24}
                   pointerEvents="none"
                 />
               ))}
@@ -1452,7 +1453,7 @@ export default function MapCanvas({
               />
             </g>
           )}
-          {mapMode === "colony" && (
+          {mapMode === "colony" && legacyArtwork && (
             <g
               data-illustrative-road-details
               aria-hidden="true"

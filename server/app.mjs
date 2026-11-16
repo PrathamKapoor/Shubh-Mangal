@@ -469,12 +469,13 @@ export function createApp(
     });
   });
   app.get("/api/public/layout", (req, res) => {
-    if (demo) return res.json(selectedLayout);
+    if (demo) return res.json({ ...selectedLayout, legacyArtwork: sourceBundle === "public/data/layout.json" });
     // Connected visitors receive projection metadata only; the static source
     // cells and areas are provisional and are not published inventory.
     res.json({
       project: publicSiteConfig.name,
       viewBox: selectedLayout.viewBox,
+      legacyArtwork: sourceBundle === "public/data/layout.json",
       origin: selectedLayout.origin,
       geographicBounds: selectedLayout.geographicBounds,
       plots: [],
@@ -1465,6 +1466,14 @@ export function createApp(
       .strict()
       .parse(req.body);
     const data = contentSchemas[body.kind].parse(body.data);
+    if (body.kind === "amenity" && data.location) {
+      // Retain the historical placement envelope for the original source only.
+      const [west,south,east,north] = sourceBundle === "public/data/layout.json"
+        ? [74.9,24.46,74.92,24.48] : selectedLayout.geographicBounds;
+      const {lat,lon} = data.location;
+      if (lon < west || lon > east || lat < south || lat > north)
+        throw new HttpError(422, "Amenity location is outside the selected site's placement bounds");
+    }
     const reference = sourceBundle === "public/data/layout.json" ? referenceFor(req.params.id) : null;
     if (reference && body.kind !== "amenity")
       throw new HttpError(

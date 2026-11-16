@@ -33,7 +33,7 @@ export default function MapPositionEditor({
     [wholeArea, setWholeArea] = useState(false),
     [focusLocation, setFocusLocation] = useState(location);
   const svg = useRef(null),
-    reference = referenceFor(referenceId);
+    reference = layout?.legacyArtwork === false ? null : referenceFor(referenceId);
   const useForeground = Boolean(
     reference?.foreground && imageUrl === `/assets/concepts/${reference.image}`,
   );
