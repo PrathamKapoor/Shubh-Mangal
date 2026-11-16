@@ -40,7 +40,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.16
         env:
           POSTGRES_USER: shubh_fixture
           POSTGRES_PASSWORD: synthetic-ci-password
@@ -93,3 +93,12 @@ jobs:
           ALLOW_DISPOSABLE_POSTGRES: "true"
           TEST_POSTGRES_MAJOR: "16"
           TEST_DATABASE_URL: postgresql://shubh_fixture:synthetic-ci-password@127.0.0.1:5432/shubh_test_control
+      - name: Preserve redacted spatial diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-spatial-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .local/ci-diagnostics/*.jsonl
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: warn

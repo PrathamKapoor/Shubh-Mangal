@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { validateDisposableTarget } from "../scripts/postgres-check.mjs";
+import { createDiagnostics, observePostgres, reportFailures } from "./helpers/postgres-diagnostics.mjs";
 
 // This test creates and drops a database: opt in only with a dedicated server.
 // Never use a client, production, shared, or previously protected cluster.
@@ -54,7 +55,7 @@ async function bounded(promise, label, ms = 8000) {
 
 // Observe the real transaction query, while holding the winner after it acquires
 // the exact two-integer advisory lock. This does not substitute or acquire a lock.
-function instrument(db, hooks) {
+function instrument(db, hooks, diagnostics) {
   return {
     ...db,
     transaction: (fn) => db.transaction((tx) => fn({
@@ -62,8 +63,10 @@ function instrument(db, hooks) {
       query: async (sql, args = []) => {
         if (!lockSql.test(sql)) return tx.query(sql, args);
         const pid = (await tx.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+        diagnostics.record("lock.attempt", { backend: pid, contender: hooks.hold ? "first" : "second" });
         hooks.attempt.resolve(pid);
         const result = await tx.query(sql, args);
+        diagnostics.record("lock.acquired", { backend: pid, contender: hooks.hold ? "first" : "second" });
         hooks.acquired.resolve(pid);
         if (hooks.hold) await hooks.release.promise;
         return result;
@@ -72,14 +75,16 @@ function instrument(db, hooks) {
   };
 }
 
-async function contend(setup, first, second, sendFirst, sendSecond) {
+async function contend(setup, first, second, sendFirst, sendSecond, diagnostics) {
   let firstRequest, secondRequest;
   try {
+    diagnostics.record("request.first.start");
     firstRequest = sendFirst();
     const firstPid = await bounded(Promise.race([
       first.acquired.promise,
       firstRequest.then((response) => { throw Error(`First endpoint completed with ${response.status} without acquiring SELECT pg_advisory_xact_lock(19483,11479)`); }),
     ]), "First endpoint did not acquire the requested two-integer spatial lock");
+    diagnostics.record("request.second.start");
     secondRequest = sendSecond();
     const secondPid = await bounded(Promise.race([
       second.attempt.promise,
@@ -92,10 +97,13 @@ async function contend(setup, first, second, sendFirst, sendSecond) {
       if (row.blocked) { blocked = true; break; }
       await delay(50);
     }
+    diagnostics.record("lock.blocking.assertion", { firstPid, secondPid, blocked });
     assert.ok(blocked, "second endpoint must wait for the first transaction's advisory lock");
   } finally {
+    diagnostics.record("requests.release.start");
     first.release.resolve();
-    await Promise.allSettled([firstRequest, secondRequest].filter(Boolean));
+    const results = await Promise.allSettled([firstRequest, secondRequest].filter(Boolean));
+    diagnostics.record("requests.settled", { results: results.map((result) => ({ status: result.status, httpStatus: result.value?.status })) });
   }
   return Promise.all([firstRequest, secondRequest]);
 }
@@ -111,14 +119,27 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
   ]);
   const name = `shubh_test_spatial_${randomUUID().replaceAll("-", "")}`;
   assert.match(name, /^shubh_test_spatial_[a-f0-9]{32}$/);
+  const diagnostics = createDiagnostics(name, { secrets: [config.password, password] });
+  diagnostics.phase("setup.control-connect");
+  const restoreObserver = observePostgres(pg, diagnostics);
   const admin = new pg.Client(config);
-  admin.on("error", () => {});
+  admin.on("error", (error) => diagnostics.error("control", error, { backend: admin.processID }));
+  let bodyFailure, cleanupFailure;
+  const sessions = async (label) => {
+    try {
+      const rows = (await admin.query("SELECT pid, datname, state, backend_start, wait_event_type, wait_event FROM pg_stat_activity WHERE datname=$1 ORDER BY pid", [name])).rows;
+      diagnostics.record("sessions", { label, sessions: rows });
+    } catch (error) { diagnostics.error("session-observation", error, { backend: admin.processID }); }
+  };
   let created = false;
   const pools = [];
   try {
     await admin.connect();
+    diagnostics.record("control.connected", { backend: admin.processID });
     const version = Number((await admin.query("SHOW server_version_num")).rows[0].server_version_num);
+    diagnostics.record("server.version", { version });
     assert.equal(Math.floor(version / 10000), config.major);
+    diagnostics.phase("setup.database-create");
     await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);
     created = true;
     const url = new URL("postgresql://localhost");
@@ -131,10 +152,14 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
     url.searchParams.set("options", "-c statement_timeout=15000 -c lock_timeout=12000");
     for (let i = 0; i < 3; i++) pools.push(await openDatabase({ url: url.href }));
     const [setup, firstDb, secondDb] = pools;
+    diagnostics.phase("setup.migrate");
     await migrate(setup);
+    diagnostics.phase("setup.owner");
     await createUser(setup, { email: "spatial-owner@example.invalid", name: "Synthetic owner", password, role: "owner" });
 
     for (const winner of ["entrance", "parcel"]) {
+      const scenario = `entrance-parcel.winner-${winner}`;
+      diagnostics.phase(`${scenario}.setup`);
       // Independent scenarios use a fresh synthetic login-rate window.
       await setup.query("DELETE FROM rate_limits");
       // Keep previous append-only history intact and remove its public state.
@@ -150,7 +175,7 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
 
       const first = contentionHooks(true);
       const second = contentionHooks(false);
-      const apps = [firstDb, secondDb].map((db, index) => createApp(instrument(db, index ? second : first), { origin, demo: false, production: false, googleMaps: false, logging: false }));
+      const apps = [firstDb, secondDb].map((db, index) => createApp(instrument(db, index ? second : first, diagnostics), { origin, demo: false, production: false, googleMaps: false, logging: false }));
       const clients = [];
       for (const app of apps) {
         const agent = request.agent(app);
@@ -165,10 +190,12 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
           : client.agent.patch(`/api/admin/plots/${plotId}`).send({ publication: "published", expectedVersion: 1, reason: "Synthetic concurrent parcel publication" });
         return operation.set("Origin", origin).set("X-CSRF-Token", client.csrf).set("Idempotency-Key", keys[type]).then((response) => response);
       };
+      diagnostics.phase(`${scenario}.publication`);
       const auditBefore = (await setup.query("SELECT count(*)::int AS n FROM audit_logs WHERE entity_id='visitor-entrance'")).rows[0].n;
       const [won, lost] = await contend(setup, first, second,
         () => send(clients[0], winner),
-        () => send(clients[1], winner === "entrance" ? "parcel" : "entrance"));
+        () => send(clients[1], winner === "entrance" ? "parcel" : "entrance"), diagnostics);
+      diagnostics.phase(`${scenario}.assertions`);
       assert.equal(won.status, 200, JSON.stringify(won.body));
       assert.equal(lost.status, 422, JSON.stringify(lost.body));
       assert.match(JSON.stringify(lost.body), new RegExp(plotId));
@@ -192,12 +219,15 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
       assert.equal(project.body.siteAccessStatus, winner === "entrance" ? "available" : "unavailable");
       assert.equal(project.body.items.some((item) => item.id === "visitor-entrance"), winner === "entrance");
       assert.equal(geometry.body.features.some((feature) => feature.id === plotId), winner === "parcel");
+      diagnostics.record("assertions.complete");
     }
 
     // Competing parcel publications must serialize even across revisions.
     await setup.query("UPDATE plots SET publication='reviewed' WHERE publication='published'");
     await setup.query("DELETE FROM content WHERE id='visitor-entrance'");
     for (const winningIndex of [0,1]) {
+      const scenario = `parcel-parcel.winner-${winningIndex}`;
+      diagnostics.phase(`${scenario}.setup`);
       await setup.query("DELETE FROM rate_limits");
       await setup.query("UPDATE plots SET publication='reviewed' WHERE publication='published'");
       const ids = [randomUUID(),randomUUID()];
@@ -209,7 +239,7 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
         await setup.query("INSERT INTO plot_geometry(plot_id,draft_id,revision_id) VALUES($1,$2,$2)",[id,revision]);
       }
       const first=contentionHooks(true), second=contentionHooks(false);
-      const apps=[firstDb,secondDb].map((db,index)=>createApp(instrument(db,index ? second : first),{origin,demo:false,logging:false}));
+      const apps=[firstDb,secondDb].map((db,index)=>createApp(instrument(db,index ? second : first,diagnostics),{origin,demo:false,logging:false}));
       const clients=[];
       for (const app of apps) {
         const agent=request.agent(app);
@@ -221,7 +251,9 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
       const send=(client,index)=>client.agent.patch(`/api/admin/plots/${ids[index]}`)
         .set("Origin",origin).set("X-CSRF-Token",client.csrf).set("Idempotency-Key",keys[index])
         .send({publication:"published",expectedVersion:1,reason:"Synthetic competing parcel publication"}).then((response)=>response);
-      const [won,lost]=await contend(setup,first,second,()=>send(clients[0],winningIndex),()=>send(clients[1],losingIndex));
+      diagnostics.phase(`${scenario}.publication`);
+      const [won,lost]=await contend(setup,first,second,()=>send(clients[0],winningIndex),()=>send(clients[1],losingIndex),diagnostics);
+      diagnostics.phase(`${scenario}.assertions`);
       assert.equal(won.status,200,JSON.stringify(won.body));
       assert.equal(lost.status,422,JSON.stringify(lost.body));
       assert.match(JSON.stringify(lost.body),new RegExp(ids[winningIndex]));
@@ -230,6 +262,7 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
       assert.equal(rows.find((row)=>row.id===ids[losingIndex]).version,1);
       const audits=(await setup.query("SELECT entity_id FROM audit_logs WHERE entity_id=ANY($1::text[])",[ids])).rows;
       assert.deepEqual(audits,[{entity_id:ids[winningIndex]}]);
+      diagnostics.record("assertions.complete");
     }
 
     // Both drafts are stored before either publication. Their overlapping
@@ -260,6 +293,8 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
       };
     };
     for (const winningIndex of [0, 1]) {
+      const scenario = `structure-structure.winner-${winningIndex}`;
+      diagnostics.phase(`${scenario}.setup`);
       await setup.query("DELETE FROM rate_limits");
       // Previous structure rows are synthetic and no longer participate;
       // retain their append-only audit history.
@@ -270,7 +305,7 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
         await setup.query("INSERT INTO content(id,kind,draft) VALUES($1,'structure',$2)", [id, JSON.stringify(drafts[index])]);
       const before = (await setup.query("SELECT * FROM content WHERE id = ANY($1::text[]) ORDER BY id", [ids])).rows;
       const first = contentionHooks(true), second = contentionHooks(false);
-      const apps = [firstDb, secondDb].map((db, index) => createApp(instrument(db, index ? second : first), { origin, demo: false, production: false, googleMaps: false, logging: false }));
+      const apps = [firstDb, secondDb].map((db, index) => createApp(instrument(db, index ? second : first, diagnostics), { origin, demo: false, production: false, googleMaps: false, logging: false }));
       const clients = [];
       for (const app of apps) {
         const agent = request.agent(app);
@@ -284,8 +319,10 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
         .send({ kind: "structure", data: drafts[index], expectedVersion: 1, publish: true, reason: "Synthetic competing structure publication" })
         .then((response) => response);
       const losingIndex = 1 - winningIndex;
+      diagnostics.phase(`${scenario}.publication`);
       const [won, lost] = await contend(setup, first, second,
-        () => send(clients[0], winningIndex), () => send(clients[1], losingIndex));
+        () => send(clients[0], winningIndex), () => send(clients[1], losingIndex), diagnostics);
+      diagnostics.phase(`${scenario}.assertions`);
       assert.equal(won.status, 200, JSON.stringify(won.body));
       assert.equal(lost.status, 422, JSON.stringify(lost.body));
       assert.match(JSON.stringify(lost.body), new RegExp(ids[winningIndex]));
@@ -311,13 +348,36 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
         footprint: { outer: drafts[winningIndex].footprint.outer, holes: [] },
         frame: drafts[winningIndex].frame, height: null, model: null,
       });
+      diagnostics.record("assertions.complete");
     }
+    diagnostics.phase("body.complete");
+  } catch (error) {
+    bodyFailure = error;
+    diagnostics.error("test-body", error);
   } finally {
-    for (const pool of pools.reverse()) await pool.close();
-    if (created) {
-      assert.match(name, /^shubh_test_spatial_[a-f0-9]{32}$/);
-      await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
-    }
-    await admin.end();
+    try {
+      diagnostics.phase("cleanup.pool-shutdown");
+      if (created) await sessions("before-pool-shutdown");
+      for (const [index, pool] of pools.reverse().entries()) {
+        diagnostics.record("pool.close.start", { reverseIndex: index });
+        await pool.close();
+        diagnostics.record("pool.close.complete", { reverseIndex: index });
+        if (created) await sessions(`after-pool-${index}`);
+      }
+      if (created) {
+        assert.match(name, /^shubh_test_spatial_[a-f0-9]{32}$/);
+        await sessions("before-forced-drop");
+        diagnostics.phase("cleanup.forced-drop");
+        await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
+        diagnostics.record("database.drop.complete");
+      }
+      diagnostics.phase("cleanup.control-end");
+      await admin.end();
+      diagnostics.record("control.end.complete");
+    } catch (error) {
+      cleanupFailure = error;
+      diagnostics.error("cleanup", error);
+    } finally { restoreObserver(); }
   }
+  reportFailures(bodyFailure, cleanupFailure, diagnostics.failures);
 });
