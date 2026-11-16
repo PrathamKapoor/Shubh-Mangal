@@ -1,6 +1,13 @@
 import { pathToGeographicGeometry } from "../shared/geography.mjs";
 import { hash } from "./auth.mjs";
 
+// Coordinates may contain arrays and finite numbers only, never embedded objects.
+export function projectPublicGeometry(value) {
+  const numericArray = (input) => Array.isArray(input) && input.every((part) => Array.isArray(part) ? numericArray(part) : typeof part === "number" && Number.isFinite(part));
+  if (!["Polygon", "MultiPolygon"].includes(value?.type) || !numericArray(value.coordinates)) return null;
+  return { type: value.type, coordinates: value.coordinates };
+}
+
 // Only current published mappings enter this query. One statement provides a
 // consistent mapping/version snapshot even while staff publish another revision.
 export async function publicGeometry(db, layout) {
@@ -11,9 +18,9 @@ export async function publicGeometry(db, layout) {
   ).rows;
   const features = rows.flatMap((row) => {
     // New revisions retain input WGS84; legacy immutable cells have line paths.
-    const geometry =
+    const geometry = projectPublicGeometry(
       row.geometry.geographicGeometry ||
-      pathToGeographicGeometry(row.geometry.path, layout);
+      pathToGeographicGeometry(row.geometry.path, layout));
     if (!geometry) return [];
     return [
       {
@@ -31,7 +38,7 @@ export async function publicGeometry(db, layout) {
             ? "reviewed-input"
             : "legacy-projected-path",
         },
-        geometry: { type: geometry.type, coordinates: geometry.coordinates },
+        geometry,
       },
     ];
   });

@@ -10,9 +10,9 @@ test("public snapshot returns one coherent whitelisted project, inventory and ge
   try {
     await migrate(db);
     await db.query("INSERT INTO geometry_revisions(id,source_hash,provenance) VALUES('fixture','fixture','{}')");
-    await db.query("INSERT INTO draft_cells(id,revision_id,data) VALUES('cell','fixture',$1)",[JSON.stringify({path:"M100,100 L110,100 L110,110 L100,110 Z",privateNote:"PRIVATE-FIXTURE",edges:[{metres:10,privateNote:"PRIVATE-FIXTURE"}],geographicGeometry:{type:"Polygon",coordinates:[[[74.9,24.46],[74.901,24.46],[74.901,24.461],[74.9,24.46]]],privateNote:"PRIVATE-FIXTURE"}})]);
+    await db.query("INSERT INTO draft_cells(id,revision_id,data) VALUES('cell','fixture',$1)",[JSON.stringify({path:"M100,100 L110,100 L110,110 L100,110 Z",privateNote:"PRIVATE-FIXTURE",verifiedDimensions:{privateNote:"PRIVATE-FIXTURE"},edges:[{metres:10,a:[1,{privateNote:"PRIVATE-FIXTURE"}],privateNote:"PRIVATE-FIXTURE"}],geographicGeometry:{type:"Polygon",coordinates:[[[74.9,24.46],[74.901,24.46],[74.901,24.461],[74.9,24.46]]],privateNote:"PRIVATE-FIXTURE"}})]);
     const id=randomUUID();
-    await db.query("INSERT INTO plots(id,number,block,data,publication,verified_at,price_inr,price_visible) VALUES($1,'101','A',$2,'published',now(),999,false)",[id,JSON.stringify({number:"101",block:"A",sourceDocument:"Approved plan",sourceRevision:"r1",areaSqM:100,areaSourceText:"100 m2",reviewNote:"PRIVATE-FIXTURE",privateNote:"PRIVATE-FIXTURE",dimensions:[{name:"side",metres:10,sourceText:"10m",privateNote:"PRIVATE-FIXTURE"}]})]);
+    await db.query("INSERT INTO plots(id,number,block,data,publication,verified_at,price_inr,price_visible) VALUES($1,'101','A',$2,'published',now(),999,false)",[id,JSON.stringify({number:"101",block:"A",sourceDocument:"Approved plan",sourceRevision:"r1",areaSqM:100,areaSourceText:"100 m2",reviewNote:"PRIVATE-FIXTURE",privateNote:"PRIVATE-FIXTURE",documentIds:["public-doc",{privateNote:"PRIVATE-FIXTURE"}],dimensions:[{name:"side",metres:10,sourceText:"10m",privateNote:"PRIVATE-FIXTURE"}]})]);
     await db.query("INSERT INTO plot_geometry(plot_id,draft_id,revision_id) VALUES($1,'cell','fixture')",[id]);
     const app=createApp(db,{demo:false,logging:false});
     const response=await request(app).get("/api/public/snapshot");

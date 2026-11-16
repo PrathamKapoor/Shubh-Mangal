@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { approvedDataSchema, plotEditSchema, can } from "../shared/domain.mjs";
 import { audit } from "./auth.mjs";
+import { projectPublicGeometry } from "./public-geometry.mjs";
 export class HttpError extends Error {
   constructor(status, message) {
     super(message);
@@ -20,12 +21,23 @@ export async function getPlot(tx, id) {
     )
   ).rows[0];
 }
-const pickPublic = (value, keys) => Object.fromEntries(keys.filter((key) => value?.[key] !== undefined).map((key) => [key, value[key]]));
+const isPublicScalar = (value) => value === null || typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value));
+const pickPublic = (value, keys) => Object.fromEntries(keys.filter((key) => value?.[key] !== undefined && isPublicScalar(value[key])).map((key) => [key, value[key]]));
+const numericList = (value) => Array.isArray(value) && value.every((item) => typeof item === "number" && Number.isFinite(item));
 export function publicPlot(p) {
-  const geometry = pickPublic(p.geometry, ["path", "center", "bounds", "areaSqMApprox", "identityReviewRequired", "labelCandidates", "verifiedDimensions", "geometrySource"]);
-  if (p.geometry?.geographicGeometry) geometry.geographicGeometry = pickPublic(p.geometry.geographicGeometry, ["type", "coordinates"]);
-  if (Array.isArray(p.geometry?.edges)) geometry.edges = p.geometry.edges.map((edge) => pickPublic(edge, ["a", "b", "metres", "feet"]));
-  const approved = pickPublic(p.data, ["number", "block", "phase", "corner", "parkFacing", "documentIds", "plotType", "areaSqM", "areaSourceText", "roadWidthMetres", "facing", "sourceDocument", "sourceRevision"]);
+  const geometry = pickPublic(p.geometry, ["path", "areaSqMApprox", "identityReviewRequired", "geometrySource"]);
+  if (p.geometry?.verifiedDimensions === null) geometry.verifiedDimensions = null;
+  for (const key of ["center", "bounds"]) if (numericList(p.geometry?.[key])) geometry[key] = p.geometry[key];
+  if (Array.isArray(p.geometry?.labelCandidates)) geometry.labelCandidates = p.geometry.labelCandidates.filter((item) => typeof item === "string");
+  const geographicGeometry = projectPublicGeometry(p.geometry?.geographicGeometry);
+  if (geographicGeometry) geometry.geographicGeometry = geographicGeometry;
+  if (Array.isArray(p.geometry?.edges)) geometry.edges = p.geometry.edges.map((edge) => {
+    const projected = pickPublic(edge, ["metres", "feet"]);
+    for (const key of ["a", "b"]) if (numericList(edge?.[key])) projected[key] = edge[key];
+    return projected;
+  });
+  const approved = pickPublic(p.data, ["number", "block", "phase", "corner", "parkFacing", "plotType", "areaSqM", "areaSourceText", "roadWidthMetres", "facing", "sourceDocument", "sourceRevision"]);
+  if (Array.isArray(p.data?.documentIds)) approved.documentIds = p.data.documentIds.filter((item) => typeof item === "string");
   if (Array.isArray(p.data?.dimensions)) approved.dimensions = p.data.dimensions.map((dimension) => pickPublic(dimension, ["name", "metres", "sourceText", "edgeIndex"]));
   return {
     ...geometry,
