@@ -135,6 +135,8 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
     await createUser(setup, { email: "spatial-owner@example.invalid", name: "Synthetic owner", password, role: "owner" });
 
     for (const winner of ["entrance", "parcel"]) {
+      // Independent scenarios use a fresh synthetic login-rate window.
+      await setup.query("DELETE FROM rate_limits");
       // Keep previous append-only history intact and remove its public state.
       await setup.query("UPDATE plots SET publication='reviewed' WHERE publication='published'");
       await setup.query("DELETE FROM content WHERE id='visitor-entrance'");
@@ -192,6 +194,44 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
       assert.equal(geometry.body.features.some((feature) => feature.id === plotId), winner === "parcel");
     }
 
+    // Competing parcel publications must serialize even across revisions.
+    await setup.query("UPDATE plots SET publication='reviewed' WHERE publication='published'");
+    await setup.query("DELETE FROM content WHERE id='visitor-entrance'");
+    for (const winningIndex of [0,1]) {
+      await setup.query("DELETE FROM rate_limits");
+      await setup.query("UPDATE plots SET publication='reviewed' WHERE publication='published'");
+      const ids = [randomUUID(),randomUUID()];
+      for (const id of ids) {
+        const revision = `parcel-${randomUUID()}`;
+        await setup.query("INSERT INTO geometry_revisions(id,source_hash,provenance) VALUES($1,$1,'{}')",[revision]);
+        await setup.query("INSERT INTO draft_cells(id,revision_id,data) VALUES($1,$1,$2)",[revision,JSON.stringify({geographicGeometry:{type:"Polygon",coordinates:[footprint.outer]}})]);
+        await setup.query("INSERT INTO plots(id,number,block,data,publication,verified_at) VALUES($1,$2,'TEST',$3,'reviewed',now())",[id,id,JSON.stringify({number:id,block:"TEST"})]);
+        await setup.query("INSERT INTO plot_geometry(plot_id,draft_id,revision_id) VALUES($1,$2,$2)",[id,revision]);
+      }
+      const first=contentionHooks(true), second=contentionHooks(false);
+      const apps=[firstDb,secondDb].map((db,index)=>createApp(instrument(db,index ? second : first),{origin,demo:false,logging:false}));
+      const clients=[];
+      for (const app of apps) {
+        const agent=request.agent(app);
+        const login=await agent.post("/api/auth/login").set("Origin",origin).send({email:"spatial-owner@example.invalid",password});
+        assert.equal(login.status,200);
+        clients.push({agent,csrf:login.body.csrf});
+      }
+      const keys=[randomUUID(),randomUUID()], losingIndex=1-winningIndex;
+      const send=(client,index)=>client.agent.patch(`/api/admin/plots/${ids[index]}`)
+        .set("Origin",origin).set("X-CSRF-Token",client.csrf).set("Idempotency-Key",keys[index])
+        .send({publication:"published",expectedVersion:1,reason:"Synthetic competing parcel publication"}).then((response)=>response);
+      const [won,lost]=await contend(setup,first,second,()=>send(clients[0],winningIndex),()=>send(clients[1],losingIndex));
+      assert.equal(won.status,200,JSON.stringify(won.body));
+      assert.equal(lost.status,422,JSON.stringify(lost.body));
+      assert.match(JSON.stringify(lost.body),new RegExp(ids[winningIndex]));
+      const rows=(await setup.query("SELECT id,publication,version FROM plots WHERE id=ANY($1::uuid[])",[ids])).rows;
+      assert.equal(rows.find((row)=>row.id===ids[losingIndex]).publication,"reviewed");
+      assert.equal(rows.find((row)=>row.id===ids[losingIndex]).version,1);
+      const audits=(await setup.query("SELECT entity_id FROM audit_logs WHERE entity_id=ANY($1::text[])",[ids])).rows;
+      assert.deepEqual(audits,[{entity_id:ids[winningIndex]}]);
+    }
+
     // Both drafts are stored before either publication. Their overlapping
     // footprints compete only through the real authenticated content endpoint.
     await setup.query("UPDATE plots SET publication='reviewed' WHERE publication='published'");
@@ -220,6 +260,7 @@ test("PostgreSQL spatial publication serializes both collision orders using the 
       };
     };
     for (const winningIndex of [0, 1]) {
+      await setup.query("DELETE FROM rate_limits");
       // Previous structure rows are synthetic and no longer participate;
       // retain their append-only audit history.
       await setup.query("DELETE FROM content WHERE kind='structure'");

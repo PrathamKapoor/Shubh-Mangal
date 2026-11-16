@@ -76,6 +76,39 @@ function footprintProjector(sourceLayout) {
     return [x, y];
   };
 }
+// Called after the proposed publication while the shared spatial lock is held.
+// A thrown error rolls the publication and its audit entry back together.
+async function assessPublishedParcel(id, db, layout) {
+  const current = await publicGeometry(db, layout);
+  const count = Number((await db.query("SELECT count(*) AS n FROM plots WHERE publication='published'")).rows[0].n);
+  if (current.features.length !== current.mappings.length || current.mappings.length !== count)
+    throw new HttpError(422, "A published plot has no usable geometry; resolve it before publishing another plot");
+  const project = footprintProjector(layout);
+  const polygons = [];
+  for (const feature of current.features) {
+    try {
+      const geometry = feature.geometry;
+      const parts = geometry?.type === "Polygon" ? [geometry.coordinates] : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
+      if (!Array.isArray(parts) || !parts.length) throw Error("unsupported geometry");
+      for (const [index, rings] of parts.entries()) {
+        const polygon = { id: `${feature.id}:${index}`, outer: rings[0].map(project), holes: rings.slice(1).map((ring) => ring.map(project)) };
+        if (!validateFootprint({ ...polygon, interactions: [] }).valid) throw Error("invalid geometry");
+        polygons.push(polygon);
+      }
+    } catch {
+      throw new HttpError(422, `Published plot ${feature.id} has invalid or unsupported geometry`);
+    }
+  }
+  const proposed = polygons.filter((polygon) => polygon.id.startsWith(`${id}:`));
+  if (!proposed.length) throw new HttpError(422, "The proposed plot has no usable geometry");
+  const others = polygons.filter((polygon) => !polygon.id.startsWith(`${id}:`));
+  const [x,y,w,h] = layout.viewBox;
+  for (const polygon of proposed) {
+    const assessment = assessFootprint({ ...polygon, interactions: [] }, { bounds: [x,y,x+w,y+h], polygons: others });
+    if (assessment.overlaps.length)
+      throw new HttpError(422, `Plot overlaps published plot ${assessment.overlaps[0].id.split(":")[0]}`);
+  }
+}
 async function assessAccessFootprint(footprint, db, sourceLayout) {
   const project = footprintProjector(sourceLayout);
   const projected = {
@@ -396,6 +429,7 @@ export function createApp(
       }
       let result = await fn(tx);
       if (scope.startsWith("plot:") && req.body.publication === "published") {
+        await assessPublishedParcel(req.params.id, tx, selectedLayout);
         const items = (await tx.query("SELECT id,kind,published FROM content WHERE id='visitor-entrance' AND published IS NOT NULL")).rows;
         const access = reviewedVisitorAccess(items);
         if (access?.footprint)
